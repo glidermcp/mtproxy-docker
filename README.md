@@ -46,7 +46,6 @@ This guide assumes that you're performing the steps on a Linux machine.
         restart: unless-stopped
         ports:
           - "443:443/tcp"
-          - "443:443/udp"
         volumes:
           - ./data:/data
         environment:
