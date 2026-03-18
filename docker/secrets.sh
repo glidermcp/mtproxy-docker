@@ -2,7 +2,7 @@
 
 declare -a CLIENT_SECRETS=()
 
-append_client_secrets() {
+append_client_secrets_from_value() {
   local input="$1"
   local separator_expression="$2"
   local secret
@@ -13,8 +13,13 @@ append_client_secrets() {
   done < <(printf '%s\n' "$input" | tr "$separator_expression" '\n')
 }
 
-load_client_secrets_from_file() {
-  append_client_secrets "$(cat "$MTPROXY_SECRET_FILE")" ',[:space:]'
+append_client_secrets_from_file() {
+  local secret
+
+  while IFS= read -r secret; do
+    [[ -n "$secret" ]] || continue
+    CLIENT_SECRETS+=( "$secret" )
+  done < <(tr ',[:space:]' '\n' < "$MTPROXY_SECRET_FILE")
 }
 
 write_client_secrets_file() {
@@ -32,13 +37,13 @@ load_client_secrets() {
   CLIENT_SECRETS=()
 
   if [[ -n "${MTPROXY_SECRET:-}" ]]; then
-    append_client_secrets "$MTPROXY_SECRET" ','
+    append_client_secrets_from_value "$MTPROXY_SECRET" ','
     write_client_secrets_file
     return 0
   fi
 
   if [[ -s "$MTPROXY_SECRET_FILE" ]]; then
-    load_client_secrets_from_file
+    append_client_secrets_from_file
     if [[ "${#CLIENT_SECRETS[@]}" -gt 0 ]]; then
       return 0
     fi

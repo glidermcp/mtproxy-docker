@@ -4,10 +4,6 @@ set -euo pipefail
 
 . /env.sh
 
-log_error() {
-  echo "$1" >&2
-}
-
 tmp_secret="$(mktemp)"
 tmp_config="$(mktemp)"
 
@@ -23,6 +19,6 @@ if curl -fsSL https://core.telegram.org/getProxySecret -o "$tmp_secret" \
   chmod 0644 "$PROXY_SECRET_FILE" "$PROXY_CONFIG_FILE"
   echo "Updated Telegram proxy files."
 else
-  log_error "Failed to download Telegram proxy files."
+  echo "Failed to download Telegram proxy files." >&2
   exit 1
 fi
