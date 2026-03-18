@@ -124,5 +124,13 @@ Public IPv4 address to pass to `mtproto-proxy --nat-info`.
 Used when the container runs behind Docker bridge/NAT instead of
 `network_mode: host`.
 
+Defaults to `MTPROXY_PUBLIC_HOST`. If `MTPROXY_PUBLIC_HOST` is a hostname
+rather than an IPv4 address, you have to set `MTPROXY_NAT_PUBLIC_IP` or disable
+NAT info.
+
+#### `MTPROXY_NAT_DISABLE` (default `0`)
+Disable passing `--nat-info` to `mtproto-proxy`. May be useful if you prefer
+using `network_mode: host`.
+
 <!-- Links -->
 [tg-docker-outdated]: https://github.com/TelegramMessenger/MTProxy#:~:text=the%20image%20is%20outdated

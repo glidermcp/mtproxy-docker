@@ -26,20 +26,46 @@ detect_nat_private_ip() {
   printf '%s\n' "${detected_ips%% *}"
 }
 
+is_ipv4() {
+  local ip="$1"
+  local octet
+
+  IFS=. read -r -a octets <<< "$ip"
+  [[ "${#octets[@]}" -eq 4 ]] || return 1
+
+  for octet in "${octets[@]}"; do
+    [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+    ((octet <= 255)) || return 1
+  done
+}
+
 configure_nat_info() {
   local private_ip
 
-  if [[ -z "$MTPROXY_NAT_PUBLIC_IP" ]]; then
+  if [[ "$MTPROXY_NAT_DISABLE" == "1" ]]; then
     return 0
   fi
 
+  if ! is_ipv4 "$MTPROXY_NAT_PUBLIC_IP"; then
+    die "MTPROXY_NAT_PUBLIC_IP must be an IPv4 address. " \
+        "If you're using a hostname in MTPROXY_PUBLIC_HOST, you have to " \
+        "set MTPROXY_NAT_PUBLIC_IP manually."
+  fi
+
   private_ip="$(detect_nat_private_ip)"
+
+  if ! is_ipv4 "$private_ip"; then
+    die "Failed to detect the container IPv4 address. " \
+        "You have to set MTPROXY_NAT_PRIVATE_IP manually or disable NAT args " \
+        "and use host networking."
+    return 0
+  fi
 
   NAT_INFO_ARGS=(
     --nat-info "$private_ip":"$MTPROXY_NAT_PUBLIC_IP"
   )
 
-  echo "Using MTProxy NAT info: ${private_ip} -> ${MTPROXY_NAT_PUBLIC_IP}."
+  echo "Using NAT info: ${private_ip}:${MTPROXY_NAT_PUBLIC_IP}."
 }
 
 telegram_files_present() {
