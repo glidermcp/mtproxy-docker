@@ -19,16 +19,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve upstream metadata
-        id: upstream
-        uses: ./.github/actions/resolve-upstream
+      - name: Resolve version
+        id: version
+        uses: ./.github/actions/resolve-version
 
       - name: Check published image for latest upstream commit
         id: image
         run: |
           set -euo pipefail
 
-          image="${IMAGE_NAME}:${{ steps.upstream.outputs.image_tag }}"
+          image="${IMAGE_NAME}:${{ steps.version.outputs.image_tag }}"
 
           if docker manifest inspect "$image" >/dev/null 2>&1; then
             echo "Image is up to date: $image"
