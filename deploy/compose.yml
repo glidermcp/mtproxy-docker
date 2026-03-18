@@ -1,0 +1,11 @@
+services:
+  mtproxy:
+    image: ${MTPROXY_IMAGE:-ghcr.io/glidermcp/mtproxy-docker:latest}
+    container_name: mtproxy
+    restart: unless-stopped
+    ports:
+      - "443:443/tcp"
+    env_file:
+      - ./mtproxy.env
+    volumes:
+      - ./data:/data

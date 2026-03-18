@@ -41,7 +41,7 @@ This guide assumes that you're performing the steps on a Linux machine.
     ```yml
     services:
       mtproxy:
-        image: ghcr.io/wukko/mtproxy-docker:latest
+        image: ghcr.io/glidermcp/mtproxy-docker:latest
         container_name: mtproxy
         restart: unless-stopped
         ports:
@@ -72,6 +72,63 @@ This guide assumes that you're performing the steps on a Linux machine.
 
 7. Copy the proxy link. Enjoy unrestricted access to Telegram and share your
    proxy with a friend.
+
+## Host On Hetzner
+
+Hetzner Cloud is the practical default for public MTProxy hosting: you get a
+normal VM with a public IPv4, standard Docker support, and no L4 proxy product
+requirements in front of your traffic.
+
+1. Create a small Hetzner Cloud VM with a public IPv4.
+2. Open inbound TCP `22` and `443` in the Hetzner firewall.
+3. Install Docker and Compose on the server.
+4. Copy [deploy/compose.yml](./deploy/compose.yml) to `/opt/mtproxy/compose.yml`.
+5. Copy [deploy/mtproxy.env.example](./deploy/mtproxy.env.example) to
+   `/opt/mtproxy/mtproxy.env` and fill in your real values.
+6. Start the service:
+   ```bash
+   cd /opt/mtproxy
+   docker compose up -d
+   ```
+
+If you want a domain name, point a DNS-only A record at the Hetzner IPv4. If
+you use a hostname in `MTPROXY_PUBLIC_HOST`, set `MTPROXY_NAT_PUBLIC_IP` too.
+
+## Cloudflare Notes
+
+Cloudflare is fine for DNS, but not as the default traffic path for this
+project:
+
+1. Normal Cloudflare orange-cloud proxying is HTTP/HTTPS-oriented, not a
+   general MTProxy TCP passthrough.
+2. Cloudflare Tunnel public hostnames are not a fit for normal Telegram
+   clients.
+3. Cloudflare Spectrum supports arbitrary TCP, but that is an Enterprise-tier
+   product.
+
+For most deployments, use Hetzner for the actual proxy host and optionally use
+Cloudflare in DNS-only mode.
+
+## GitHub Actions Deploy
+
+This repo already builds and publishes the image to GHCR. It now also supports
+manual production deploys over SSH.
+
+Required GitHub Actions secrets:
+
+1. `PROD_HOST`
+2. `PROD_USER`
+3. `PROD_SSH_KEY`
+4. `PROD_PORT` (optional, defaults to `22`)
+
+Remote host expectations:
+
+1. Docker and Docker Compose are installed.
+2. `/opt/mtproxy/mtproxy.env` already exists.
+3. The remote user can run `docker compose`.
+
+To deploy, run the `Deploy Production` workflow and set `image_tag` if you want
+something other than `latest`.
 
 ## Environment variables
 
@@ -104,8 +161,11 @@ Local MTProxy stats port.
 #### `MTPROXY_WORKERS` (default `1`)
 Number of worker processes.
 
-#### `MTPROXY_TAG`
-Proxy tag from `@MTProxybot` (`-P` argument).
+#### `MTPROXY_SPONSORED_TAG`
+Proxy tag from `@MTProxybot` for sponsored placement (`-P` argument).
+
+There is no separate upstream "sponsored channel" server setting. MTProxy uses
+the bot-issued proxy tag.
 
 #### `MTPROXY_AUTO_UPDATE_TELEGRAM_FILES` (default `1`)
 Download `/data/telegram-proxy-secret` and `/data/telegram-proxy-config` at
