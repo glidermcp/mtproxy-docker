@@ -49,8 +49,12 @@ This guide assumes that you're performing the steps on a Linux machine.
         volumes:
           - ./data:/data
         environment:
-          # REQUIRED: your server's public IP/host
-          MTPROXY_PUBLIC_HOST: "133.7.69.67"
+          # REQUIRED: public hostname clients will use
+          MTPROXY_PUBLIC_HOST: "life.wearbrands.vip"
+          # REQUIRED when using a hostname instead of a raw IPv4
+          MTPROXY_NAT_PUBLIC_IP: "203.0.113.10"
+          # RECOMMENDED: padded secret for harder traffic fingerprinting
+          MTPROXY_SECRET: "dd0123456789abcdef0123456789abcdef"
     ```
 
     Note: if you're using a hostname for `MTPROXY_PUBLIC_HOST` rather than
@@ -91,23 +95,32 @@ requirements in front of your traffic.
    docker compose up -d
    ```
 
-If you want a domain name, point a DNS-only A record at the Hetzner IPv4. If
-you use a hostname in `MTPROXY_PUBLIC_HOST`, set `MTPROXY_NAT_PUBLIC_IP` too.
+Recommended production profile for this repo:
+
+1. Run MTProxy on Hetzner.
+2. Point `life.wearbrands.vip` to the Hetzner IPv4 with a DNS-only A record.
+3. Keep client traffic on TCP `443`.
+4. Use a padded client secret prefixed with `dd`.
+5. If you want sponsorship, configure `@wear_brands_spain` in `@MTProxybot`
+   and paste the returned tag into `MTPROXY_SPONSORED_TAG`.
+
+If you use a hostname in `MTPROXY_PUBLIC_HOST`, set `MTPROXY_NAT_PUBLIC_IP`
+too.
 
 ## Cloudflare Notes
 
-Cloudflare is fine for DNS, but not as the default traffic path for this
-project:
+Cloudflare is supported only for DNS in this setup.
 
-1. Normal Cloudflare orange-cloud proxying is HTTP/HTTPS-oriented, not a
-   general MTProxy TCP passthrough.
-2. Cloudflare Tunnel public hostnames are not a fit for normal Telegram
+1. Set `life.wearbrands.vip` to DNS-only. Do not orange-cloud this record.
+2. Cloudflare Containers are not a fit for MTProxy because they do not expose a
+   direct public MTProto TCP endpoint that Telegram clients can use.
+3. Cloudflare Tunnel public hostnames are not a fit for normal Telegram
    clients.
-3. Cloudflare Spectrum supports arbitrary TCP, but that is an Enterprise-tier
+4. Cloudflare Spectrum supports arbitrary TCP, but that is an Enterprise-tier
    product.
 
-For most deployments, use Hetzner for the actual proxy host and optionally use
-Cloudflare in DNS-only mode.
+For this repo, use Hetzner for the actual proxy host and Cloudflare only in
+DNS-only mode.
 
 ## GitHub Actions Deploy
 
@@ -126,6 +139,7 @@ Remote host expectations:
 1. Docker and Docker Compose are installed.
 2. `/opt/mtproxy/mtproxy.env` already exists.
 3. The remote user can run `docker compose`.
+4. `life.wearbrands.vip` already resolves to the Hetzner host in DNS-only mode.
 
 To deploy, run the `Deploy Production` workflow and set `image_tag` if you want
 something other than `latest`.
@@ -143,10 +157,19 @@ If none are set, one client secret is generated automatically and stored in
 
 If you want clients to use random padding, prefix the secret(s) with `dd`.
 
+For a public deployment on `life.wearbrands.vip`, padded secrets are the
+recommended default.
+
 You can generate a plain secret manually:
 
 ```bash
 head -c 16 /dev/urandom | xxd -ps
+```
+
+Or generate a padded secret directly:
+
+```bash
+printf 'dd%s\n' "$(head -c 16 /dev/urandom | xxd -ps)"
 ```
 
 ### Optional variables
@@ -166,6 +189,10 @@ Proxy tag from `@MTProxybot` for sponsored placement (`-P` argument).
 
 There is no separate upstream "sponsored channel" server setting. MTProxy uses
 the bot-issued proxy tag.
+
+If you want the sponsored destination to be `@wear_brands_spain`, configure it
+in `@MTProxybot` first, then copy the returned proxy tag into
+`MTPROXY_SPONSORED_TAG`.
 
 #### `MTPROXY_AUTO_UPDATE_TELEGRAM_FILES` (default `1`)
 Download `/data/telegram-proxy-secret` and `/data/telegram-proxy-config` at
@@ -191,6 +218,13 @@ NAT info.
 #### `MTPROXY_NAT_DISABLE` (default `0`)
 Disable passing `--nat-info` to `mtproto-proxy`. May be useful if you prefer
 using `network_mode: host`.
+
+## Follow-Up Research
+
+This repo keeps the official MTProxy runtime for now. If you want stronger
+censorship resistance than the official server can offer, see
+[docs/censorship-resistance.md](./docs/censorship-resistance.md) for the
+follow-up evaluation track.
 
 <!-- Links -->
 [tg-docker-outdated]: https://github.com/TelegramMessenger/MTProxy#:~:text=the%20image%20is%20outdated
