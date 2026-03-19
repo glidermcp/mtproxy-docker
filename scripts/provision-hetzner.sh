@@ -12,6 +12,19 @@ escape_sed_replacement() {
   printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
 }
 
+first_existing_admin_key() {
+  local candidate
+
+  for candidate in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 wait_for_ssh_fingerprint() {
   local host="$1"
   local attempt
@@ -49,7 +62,7 @@ SERVER_IMAGE="${SERVER_IMAGE:-ubuntu-24.04}"
 PUBLIC_HOST="${PUBLIC_HOST:-life.wearbrands.vip}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 ADMIN_SSH_KEY_NAME="${ADMIN_SSH_KEY_NAME:-mtproxy-admin}"
-ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-${HOME}/.ssh/id_ed25519.pub}"
+ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
 DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${HOME}/.ssh/mtproxy-actions.pub}"
 
 [[ -f "$CLOUD_INIT_TEMPLATE" ]] || die "Missing cloud-init template: $CLOUD_INIT_TEMPLATE"
@@ -68,12 +81,15 @@ fi
 tmp_user_data="$(mktemp)"
 trap 'rm -f "$tmp_user_data"' EXIT
 
+admin_public_key="$(tr -d '\n' < "$ADMIN_SSH_PUBLIC_KEY_FILE")"
 deploy_public_key="$(tr -d '\n' < "$DEPLOY_SSH_PUBLIC_KEY_FILE")"
 escaped_user="$(escape_sed_replacement "$DEPLOY_USER")"
+escaped_admin_key="$(escape_sed_replacement "$admin_public_key")"
 escaped_key="$(escape_sed_replacement "$deploy_public_key")"
 
 sed \
   -e "s/__DEPLOY_USER__/${escaped_user}/g" \
+  -e "s/__ADMIN_SSH_PUBLIC_KEY__/${escaped_admin_key}/g" \
   -e "s/__DEPLOY_SSH_PUBLIC_KEY__/${escaped_key}/g" \
   "$CLOUD_INIT_TEMPLATE" > "$tmp_user_data"
 

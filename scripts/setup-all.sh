@@ -13,11 +13,24 @@ require_command git
 require_command ssh-keygen
 require_command ssh-keyscan
 
+first_existing_admin_key() {
+  local candidate
+
+  for candidate in "${HOME}/.ssh/id_ed25519.pub" "${HOME}/.ssh/id_rsa.pub"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 PUBLIC_HOST="${PUBLIC_HOST:-life.wearbrands.vip}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 DEPLOY_SSH_PRIVATE_KEY_FILE="${DEPLOY_SSH_PRIVATE_KEY_FILE:-${HOME}/.ssh/mtproxy-actions}"
 DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${DEPLOY_SSH_PRIVATE_KEY_FILE}.pub}"
-ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-${HOME}/.ssh/id_rsa.pub}"
+ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
 
 ensure_deploy_key() {
   if [[ -f "$DEPLOY_SSH_PRIVATE_KEY_FILE" && -f "$DEPLOY_SSH_PUBLIC_KEY_FILE" ]]; then

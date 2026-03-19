@@ -150,7 +150,7 @@ Recommended one-time provisioning flow:
 3. Export your Cloudflare zone id as `CLOUDFLARE_ZONE_ID`.
 4. Run the Hetzner provisioning script:
    ```bash
-   ADMIN_SSH_PUBLIC_KEY_FILE=~/.ssh/id_ed25519.pub \
+   ADMIN_SSH_PUBLIC_KEY_FILE=~/.ssh/id_rsa.pub \
    DEPLOY_SSH_PUBLIC_KEY_FILE=~/.ssh/mtproxy-actions.pub \
    ./scripts/provision-hetzner.sh
    ```
@@ -163,6 +163,14 @@ Recommended one-time provisioning flow:
    ```
 6. SSH to the server with your personal key and replace the placeholder values
    in `/opt/mtproxy/mtproxy.env`.
+
+New servers are hardened during bootstrap:
+
+1. your personal admin key and the GitHub deploy key are both installed on
+   `deploy`
+2. SSH logins are restricted to `deploy`
+3. password auth is disabled
+4. direct root SSH is disabled
 
 If you want the shortest path, put your Cloudflare values in `.env.local` and
 run:
@@ -177,6 +185,10 @@ That script:
 2. Provisions the Hetzner server
 3. Creates or updates the Cloudflare DNS record
 4. Writes the required GitHub Actions secrets via `gh secret set`
+
+If your admin key is `~/.ssh/id_ed25519.pub`, point `ADMIN_SSH_PUBLIC_KEY_FILE`
+there instead. `scripts/setup-all.sh` will auto-detect `id_ed25519.pub` first
+and then fall back to `id_rsa.pub`.
 
 ## Cloudflare Notes
 
@@ -220,6 +232,18 @@ Remote host expectations:
 2. `/opt/mtproxy/mtproxy.env` already exists.
 3. The remote user can run `docker compose`.
 4. `life.wearbrands.vip` already resolves to the Hetzner host in DNS-only mode.
+5. SSH is key-only and restricted to `deploy`.
+
+SSH hardening policy:
+
+1. `PermitRootLogin no`
+2. `PasswordAuthentication no`
+3. `KbdInteractiveAuthentication no`
+4. `PubkeyAuthentication yes`
+5. `AllowUsers deploy`
+
+If you ever lock yourself out, use the Hetzner web console as the break-glass
+recovery path.
 
 To deploy, run the `Deploy Production` workflow and set `image_tag` if you want
 something other than `latest`.
