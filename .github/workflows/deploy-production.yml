@@ -29,6 +29,7 @@ jobs:
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           port: ${{ secrets.PROD_PORT || '22' }}
+          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
           source: deploy/compose.yml
           target: ${{ env.DEPLOY_PATH }}
           strip_components: 1
@@ -40,6 +41,7 @@ jobs:
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           port: ${{ secrets.PROD_PORT || '22' }}
+          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
           envs: DEPLOY_PATH,IMAGE_NAME
           script: |
             set -euo pipefail

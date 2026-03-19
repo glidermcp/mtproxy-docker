@@ -1,0 +1,30 @@
+#cloud-config
+
+users:
+  - default
+  - name: __DEPLOY_USER__
+    shell: /bin/bash
+    groups:
+      - sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - __DEPLOY_SSH_PUBLIC_KEY__
+
+write_files:
+  - path: /opt/mtproxy/mtproxy.env
+    owner: __DEPLOY_USER__:__DEPLOY_USER__
+    permissions: "0640"
+    content: |
+      # Fill in the real values before running the GitHub deploy workflow.
+      MTPROXY_PUBLIC_HOST=life.wearbrands.vip
+      # MTPROXY_NAT_PUBLIC_IP=203.0.113.10
+      # MTPROXY_SECRET=0123456789abcdef0123456789abcdef
+      # MTPROXY_SPONSORED_TAG=
+
+runcmd:
+  - apt-get update
+  - apt-get install -y ca-certificates curl
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker __DEPLOY_USER__
+  - install -d -m 0755 -o __DEPLOY_USER__ -g __DEPLOY_USER__ /opt/mtproxy
+  - install -d -m 0755 -o __DEPLOY_USER__ -g __DEPLOY_USER__ /opt/mtproxy/data

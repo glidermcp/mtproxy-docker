@@ -53,8 +53,8 @@ This guide assumes that you're performing the steps on a Linux machine.
           MTPROXY_PUBLIC_HOST: "life.wearbrands.vip"
           # REQUIRED when using a hostname instead of a raw IPv4
           MTPROXY_NAT_PUBLIC_IP: "203.0.113.10"
-          # RECOMMENDED: padded secret for harder traffic fingerprinting
-          MTPROXY_SECRET: "dd0123456789abcdef0123456789abcdef"
+          # REQUIRED: raw 32-hex MTProxy secret
+          MTPROXY_SECRET: "0123456789abcdef0123456789abcdef"
     ```
 
     Note: if you're using a hostname for `MTPROXY_PUBLIC_HOST` rather than
@@ -100,12 +100,83 @@ Recommended production profile for this repo:
 1. Run MTProxy on Hetzner.
 2. Point `life.wearbrands.vip` to the Hetzner IPv4 with a DNS-only A record.
 3. Keep client traffic on TCP `443`.
-4. Use a padded client secret prefixed with `dd`.
+4. Use a raw 32-hex server secret and let the printed client link add the
+   `dd` padding prefix.
 5. If you want sponsorship, configure `@wear_brands_spain` in `@MTProxybot`
    and paste the returned tag into `MTPROXY_SPONSORED_TAG`.
 
 If you use a hostname in `MTPROXY_PUBLIC_HOST`, set `MTPROXY_NAT_PUBLIC_IP`
 too.
+
+### Automated Local Provisioning
+
+This repo now includes local helper scripts for the one-time infrastructure
+setup:
+
+1. [scripts/provision-hetzner.sh](./scripts/provision-hetzner.sh) creates the
+   Hetzner server with cloud-init bootstrap, Docker, `/opt/mtproxy`, and a
+   dedicated `deploy` user.
+2. [scripts/upsert-cloudflare-dns.sh](./scripts/upsert-cloudflare-dns.sh)
+   creates or updates the DNS-only Cloudflare record for
+   `life.wearbrands.vip`.
+
+Provisioning prerequisites on your machine:
+
+1. `hcloud`
+2. `curl`
+3. `python3`
+4. Your personal SSH public key for manual admin access
+5. A separate deploy SSH keypair for GitHub Actions
+
+You can keep local infrastructure credentials in a repo-ignored
+[.env.local.example](./.env.local.example) style file named `.env.local`.
+The helper scripts automatically load it.
+
+Recommended deploy key generation:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/mtproxy-actions -C gh-mtproxy-actions -N ""
+```
+
+Recommended one-time provisioning flow:
+
+1. Create a Hetzner Cloud API token and store it locally with:
+   ```bash
+   hcloud context create mtproxy
+   hcloud context use mtproxy
+   ```
+2. Create a Cloudflare API token with DNS edit permission for `wearbrands.vip`
+   and export `CLOUDFLARE_API_TOKEN`.
+3. Export your Cloudflare zone id as `CLOUDFLARE_ZONE_ID`.
+4. Run the Hetzner provisioning script:
+   ```bash
+   ADMIN_SSH_PUBLIC_KEY_FILE=~/.ssh/id_ed25519.pub \
+   DEPLOY_SSH_PUBLIC_KEY_FILE=~/.ssh/mtproxy-actions.pub \
+   ./scripts/provision-hetzner.sh
+   ```
+5. Run the Cloudflare DNS script with the IPv4 printed by the Hetzner script:
+   ```bash
+   CLOUDFLARE_API_TOKEN=... \
+   CLOUDFLARE_ZONE_ID=... \
+   DNS_RECORD_CONTENT=203.0.113.10 \
+   ./scripts/upsert-cloudflare-dns.sh
+   ```
+6. SSH to the server with your personal key and replace the placeholder values
+   in `/opt/mtproxy/mtproxy.env`.
+
+If you want the shortest path, put your Cloudflare values in `.env.local` and
+run:
+
+```bash
+./scripts/setup-all.sh
+```
+
+That script:
+
+1. Generates the GitHub Actions deploy key if it does not exist yet
+2. Provisions the Hetzner server
+3. Creates or updates the Cloudflare DNS record
+4. Writes the required GitHub Actions secrets via `gh secret set`
 
 ## Cloudflare Notes
 
@@ -133,6 +204,15 @@ Required GitHub Actions secrets:
 2. `PROD_USER`
 3. `PROD_SSH_KEY`
 4. `PROD_PORT` (optional, defaults to `22`)
+5. `PROD_HOST_FINGERPRINT`
+
+Recommended values:
+
+1. `PROD_USER=deploy`
+2. `PROD_PORT=22`
+3. `PROD_SSH_KEY` should contain the private contents of the dedicated
+   `~/.ssh/mtproxy-actions` key
+4. `PROD_HOST_FINGERPRINT` should be the server's ed25519 SHA256 fingerprint
 
 Remote host expectations:
 
@@ -144,32 +224,31 @@ Remote host expectations:
 To deploy, run the `Deploy Production` workflow and set `image_tag` if you want
 something other than `latest`.
 
+The provisioning script prints the values you should copy into the GitHub
+secrets after server creation.
+
 ## Environment variables
 
 #### `MTPROXY_PUBLIC_HOST` (required)
 Public IP or hostname Telegram clients use to connect.
 
 #### `MTPROXY_SECRET` (recommended)
-One or more client secrets, separated by commas.
+One or more MTProxy server secrets, separated by commas.
 
 If none are set, one client secret is generated automatically and stored in
 `/data/mtproxy-secret`.
 
-If you want clients to use random padding, prefix the secret(s) with `dd`.
+Each secret must be 32 hex digits. The repo also accepts `dd` + 32 hex digits
+as input for compatibility, but it strips the `dd` prefix before starting the
+server because upstream `mtproto-proxy` expects raw 32-hex secrets.
 
-For a public deployment on `life.wearbrands.vip`, padded secrets are the
-recommended default.
+For a public deployment on `life.wearbrands.vip`, padded client links are the
+recommended default and are printed automatically.
 
 You can generate a plain secret manually:
 
 ```bash
 head -c 16 /dev/urandom | xxd -ps
-```
-
-Or generate a padded secret directly:
-
-```bash
-printf 'dd%s\n' "$(head -c 16 /dev/urandom | xxd -ps)"
 ```
 
 ### Optional variables
@@ -183,6 +262,12 @@ Local MTProxy stats port.
 
 #### `MTPROXY_WORKERS` (default `1`)
 Number of worker processes.
+
+#### `MTPROXY_PADDED_LINKS` (default `1`)
+When set to `1`, printed Telegram proxy links use `dd<secret>` for random
+padding support.
+
+The server still uses the raw 32-hex secret internally.
 
 #### `MTPROXY_SPONSORED_TAG`
 Proxy tag from `@MTProxybot` for sponsored placement (`-P` argument).
