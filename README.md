@@ -53,8 +53,8 @@ This guide assumes that you're performing the steps on a Linux machine.
           MTPROXY_PUBLIC_HOST: "life.wearbrands.vip"
           # REQUIRED when using a hostname instead of a raw IPv4
           MTPROXY_NAT_PUBLIC_IP: "203.0.113.10"
-          # REQUIRED: raw 32-hex MTProxy secret
-          MTPROXY_SECRET: "0123456789abcdef0123456789abcdef"
+          # RECOMMENDED: point at the mounted host secret file
+          MTPROXY_SECRET_FILE: "/data/mtproxy-secret"
     ```
 
     Note: if you're using a hostname for `MTPROXY_PUBLIC_HOST` rather than
@@ -163,6 +163,13 @@ Recommended one-time provisioning flow:
    ```
 6. SSH to the server with your personal key and replace the placeholder values
    in `/opt/mtproxy/mtproxy.env`.
+7. Create `/opt/mtproxy/data/mtproxy-secret` with one raw 32-hex secret per line
+   so the secret stays out of container env metadata:
+   ```bash
+   install -d -m 0755 /opt/mtproxy/data
+   printf '%s\n' '0123456789abcdef0123456789abcdef' > /opt/mtproxy/data/mtproxy-secret
+   chmod 600 /opt/mtproxy/data/mtproxy-secret
+   ```
 
 New servers are hardened during bootstrap:
 
@@ -256,8 +263,11 @@ secrets after server creation.
 #### `MTPROXY_PUBLIC_HOST` (required)
 Public IP or hostname Telegram clients use to connect.
 
-#### `MTPROXY_SECRET` (recommended)
+#### `MTPROXY_SECRET` (fallback only)
 One or more MTProxy server secrets, separated by commas.
+
+This works, but it exposes the secret in container env metadata. Prefer
+`MTPROXY_SECRET_FILE` for production.
 
 If none are set, one client secret is generated automatically and stored in
 `/data/mtproxy-secret`.
@@ -310,6 +320,9 @@ container startup. Set to `0` to manage these files manually.
 #### `MTPROXY_SECRET_FILE` (default `/data/mtproxy-secret`)
 Persistent path for generated/provided client secret data. The file may contain
 one secret or multiple secrets separated by commas, spaces, or newlines.
+
+This is the recommended production path because the secret stays in a mounted
+host file instead of appearing in the container environment.
 
 Note: `MTPROXY_SECRET` takes precedence over `MTPROXY_SECRET_FILE` if both are
 defined.

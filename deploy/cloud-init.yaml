@@ -28,7 +28,7 @@ write_files:
       # Fill in the real values before running the GitHub deploy workflow.
       MTPROXY_PUBLIC_HOST=life.wearbrands.vip
       # MTPROXY_NAT_PUBLIC_IP=203.0.113.10
-      # MTPROXY_SECRET=0123456789abcdef0123456789abcdef
+      # MTPROXY_SECRET_FILE=/data/mtproxy-secret
       # MTPROXY_SPONSORED_TAG=
 
 runcmd:
