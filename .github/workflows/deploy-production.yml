@@ -1,0 +1,72 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "GHCR image tag to deploy"
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_PATH: /opt/mtproxy
+      IMAGE_NAME: ghcr.io/${{ github.repository }}:${{ inputs.image_tag || 'latest' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy deployment manifest
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || '22' }}
+          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
+          source: deploy/compose.yml
+          target: ${{ env.DEPLOY_PATH }}
+          strip_components: 1
+
+      - name: Deploy container
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || '22' }}
+          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
+          envs: DEPLOY_PATH,IMAGE_NAME
+          script: |
+            set -euo pipefail
+
+            mkdir -p "$DEPLOY_PATH/data"
+            test -f "$DEPLOY_PATH/mtproxy.env"
+
+            cd "$DEPLOY_PATH"
+            awk '
+              BEGIN { set = 0 }
+              /^MTPROXY_IMAGE=/ {
+                print "MTPROXY_IMAGE=" image
+                set = 1
+                next
+              }
+              { print }
+              END {
+                if (!set) {
+                  print "MTPROXY_IMAGE=" image
+                }
+              }
+            ' image="$IMAGE_NAME" .env 2>/dev/null > .env.tmp || printf 'MTPROXY_IMAGE=%s\n' "$IMAGE_NAME" > .env.tmp
+            mv .env.tmp .env
+            docker compose pull
+            docker compose up -d
+
+      - name: Report deployment
+        run: echo "Deployed ${IMAGE_NAME} to ${DEPLOY_PATH}"

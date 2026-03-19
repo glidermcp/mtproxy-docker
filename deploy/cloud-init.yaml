@@ -1,0 +1,42 @@
+#cloud-config
+
+users:
+  - default
+  - name: __DEPLOY_USER__
+    shell: /bin/bash
+    groups:
+      - sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - __ADMIN_SSH_PUBLIC_KEY__
+      - __DEPLOY_SSH_PUBLIC_KEY__
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-mtproxy-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      AllowUsers __DEPLOY_USER__
+  - path: /opt/mtproxy/mtproxy.env
+    owner: __DEPLOY_USER__:__DEPLOY_USER__
+    permissions: "0640"
+    content: |
+      # Fill in the real values before running the GitHub deploy workflow.
+      MTPROXY_PUBLIC_HOST=life.wearbrands.vip
+      # MTPROXY_NAT_PUBLIC_IP=203.0.113.10
+      # MTPROXY_SECRET_FILE=/data/mtproxy-secret
+      # MTPROXY_SPONSORED_TAG=
+
+runcmd:
+  - apt-get update
+  - apt-get install -y ca-certificates curl
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker __DEPLOY_USER__
+  - install -d -m 0755 -o __DEPLOY_USER__ -g __DEPLOY_USER__ /opt/mtproxy
+  - install -d -m 0755 -o __DEPLOY_USER__ -g __DEPLOY_USER__ /opt/mtproxy/data
+  - sshd -t
+  - systemctl reload ssh

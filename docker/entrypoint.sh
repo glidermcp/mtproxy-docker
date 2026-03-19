@@ -104,8 +104,8 @@ start_proxy() {
     args+=( -S "$secret" )
   done
 
-  if [[ -n "${MTPROXY_TAG:-}" ]]; then
-    args+=( -P "$MTPROXY_TAG" )
+  if [[ -n "${MTPROXY_SPONSORED_TAG:-}" ]]; then
+    args+=( -P "$MTPROXY_SPONSORED_TAG" )
   fi
 
   if [[ "${#NAT_INFO_ARGS[@]}" -gt 0 ]]; then
