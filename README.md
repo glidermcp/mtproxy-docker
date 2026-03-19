@@ -238,8 +238,10 @@ Remote host expectations:
 1. Docker and Docker Compose are installed.
 2. `/opt/mtproxy/mtproxy.env` already exists.
 3. The remote user can run `docker compose`.
-4. `life.wearbrands.vip` already resolves to the Hetzner host in DNS-only mode.
-5. SSH is key-only and restricted to `deploy`.
+4. `/opt/mtproxy/.env` is managed by the deploy workflow to persist the selected
+   `MTPROXY_IMAGE` tag across later `docker compose up -d` runs.
+5. `life.wearbrands.vip` already resolves to the Hetzner host in DNS-only mode.
+6. SSH is key-only and restricted to `deploy`.
 
 SSH hardening policy:
 
@@ -254,6 +256,10 @@ recovery path.
 
 To deploy, run the `Deploy Production` workflow and set `image_tag` if you want
 something other than `latest`.
+
+The workflow writes the resolved `ghcr.io/...` image tag into
+`/opt/mtproxy/.env`, so the host stays pinned to that image until a later
+deploy updates it.
 
 The provisioning script prints the values you should copy into the GitHub
 secrets after server creation.

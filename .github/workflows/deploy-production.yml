@@ -50,7 +50,21 @@ jobs:
             test -f "$DEPLOY_PATH/mtproxy.env"
 
             cd "$DEPLOY_PATH"
-            export MTPROXY_IMAGE="$IMAGE_NAME"
+            awk '
+              BEGIN { set = 0 }
+              /^MTPROXY_IMAGE=/ {
+                print "MTPROXY_IMAGE=" image
+                set = 1
+                next
+              }
+              { print }
+              END {
+                if (!set) {
+                  print "MTPROXY_IMAGE=" image
+                }
+              }
+            ' image="$IMAGE_NAME" .env 2>/dev/null > .env.tmp || printf 'MTPROXY_IMAGE=%s\n' "$IMAGE_NAME" > .env.tmp
+            mv .env.tmp .env
             docker compose pull
             docker compose up -d
 
