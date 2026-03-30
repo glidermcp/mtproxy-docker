@@ -55,15 +55,14 @@ host_fingerprint="$(printf '%s\n' "$provision_output" | awk -F'=' '/PROD_HOST_FI
 repo="$(repo_slug)"
 
 [[ -n "$server_ip" ]] || die "Failed to parse Public IPv4 from provisioning output"
+[[ -n "$host_fingerprint" ]] || die "Failed to capture a new SSH host fingerprint for ${server_ip}. Refusing to rotate PROD_HOST with a stale fingerprint."
+[[ "$host_fingerprint" != "<run ssh-keyscan later and add the ed25519 SHA256 fingerprint>" ]] || die "Hetzner provisioning did not return a usable SSH fingerprint for ${server_ip}. Refusing to rotate PROD_HOST until the new fingerprint is known."
 
 gh secret set PROD_HOST --repo "$repo" --body "$server_ip"
 gh secret set PROD_USER --repo "$repo" --body "$DEPLOY_USER"
 gh secret set PROD_PORT --repo "$repo" --body "22"
 gh secret set PROD_SSH_KEY --repo "$repo" < "$DEPLOY_SSH_PRIVATE_KEY_FILE"
-
-if [[ -n "$host_fingerprint" && "$host_fingerprint" != "<run ssh-keyscan later and add the ed25519 SHA256 fingerprint>" ]]; then
-  gh secret set PROD_HOST_FINGERPRINT --repo "$repo" --body "$host_fingerprint"
-fi
+gh secret set PROD_HOST_FINGERPRINT --repo "$repo" --body "$host_fingerprint"
 
 cat <<EOF
 

@@ -26,7 +26,9 @@ write_files:
     permissions: "0640"
     content: |
       # Fill in the real values before running the GitHub deploy workflow.
-      secret = "ee367a189aee18fa31c190054efd4a8e9573746f726167652e676f6f676c65617069732e636f6d"
+      # Generate a per-host secret with:
+      #   scripts/generate-mtg-secret.sh <front-domain>
+      secret = "REPLACE_WITH_UNIQUE_FAKE_TLS_SECRET"
       bind-to = "0.0.0.0:443"
       prefer-ip = "prefer-ipv4"
       # public-ipv4 = "203.0.113.10"

@@ -32,6 +32,9 @@ public IPv4 gets blocked.
    cp deploy/mtg.toml.example ./mtg.toml
    ```
 
+   The cloud-init bootstrap also writes a placeholder secret on new hosts, so a
+   deploy should not proceed until you replace it with a per-host value.
+
 3. Create `compose.yml`:
 
    ```yaml
@@ -129,6 +132,11 @@ finishes:
 3. Validate direct-IP access with `PUBLIC_IPV4=<server-ip> scripts/print-access-links.sh`.
 4. Update DNS if you want a stable hostname.
 5. Trigger the Deploy Production workflow.
+
+Rotation safety:
+
+1. `scripts/rotate-hetzner.sh` refuses to update `PROD_HOST` unless it can also
+   capture and store the new SSH host fingerprint.
 
 ## Rotation / Ban Recovery
 
