@@ -46,24 +46,23 @@ jobs:
           script: |
             set -euo pipefail
 
-            mkdir -p "$DEPLOY_PATH/data"
-            test -f "$DEPLOY_PATH/mtproxy.env"
+            test -f "$DEPLOY_PATH/mtg.toml"
 
             cd "$DEPLOY_PATH"
             awk '
               BEGIN { set = 0 }
-              /^MTPROXY_IMAGE=/ {
-                print "MTPROXY_IMAGE=" image
+              /^MTG_IMAGE=/ {
+                print "MTG_IMAGE=" image
                 set = 1
                 next
               }
               { print }
               END {
                 if (!set) {
-                  print "MTPROXY_IMAGE=" image
+                  print "MTG_IMAGE=" image
                 }
               }
-            ' image="$IMAGE_NAME" .env 2>/dev/null > .env.tmp || printf 'MTPROXY_IMAGE=%s\n' "$IMAGE_NAME" > .env.tmp
+            ' image="$IMAGE_NAME" .env 2>/dev/null > .env.tmp || printf 'MTG_IMAGE=%s\n' "$IMAGE_NAME" > .env.tmp
             mv .env.tmp .env
             docker compose pull
             docker compose up -d

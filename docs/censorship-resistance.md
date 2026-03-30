@@ -1,39 +1,39 @@
 # Censorship Resistance Follow-Up
 
-This repo keeps the official Telegram MTProxy server as the production runtime
-for now. The near-term deployment target is:
+This repo now uses `mtg` as the production Telegram proxy runtime. The current
+deployment target is:
 
-1. Hetzner-hosted MTProxy
-2. a public hostname such as `mtproxy.example.com`
+1. Hetzner-hosted `mtg`
+2. a public hostname such as `mtproxy.example.com`, plus direct-IP links for
+   recovery
 3. Cloudflare in DNS-only mode
 4. TCP `443`
-5. Padded client secrets
+5. FakeTLS secrets generated for an operator-chosen front domain
 
 ## Why This Follow-Up Exists
 
-The current runtime is intentionally close to the official MTProxy
-implementation. That keeps operational risk low, but it may not be the strongest
-option against aggressive blocking or DPI.
+The migration away from the official MTProxy server happened because the old
+runtime and a long-lived static IP were too easy to burn. `mtg` gives this repo
+a stronger FakeTLS-oriented runtime, but it still does not eliminate the need
+for fast host replacement.
 
-## Questions To Answer
+## Operating Rules
 
-Any alternative runtime evaluation should answer:
+The operational assumptions for this repo are now:
 
-1. Does it remain compatible with normal Telegram MTProxy clients?
-2. Does it provide materially better anti-DPI or fake-TLS style camouflage than
-   the official MTProxy server?
-3. Can it still be deployed cleanly from this Docker-based repo?
-4. Can it keep the same public deployment shape:
-   `mtproxy.example.com`, port `443`, Hetzner origin, Cloudflare DNS-only?
-5. Would switching require replacing the current image entirely, or can the
-   current repo be extended?
+1. The Hetzner host is disposable. If an IP is blocked, create a new host
+   instead of trying to preserve the old one.
+2. A direct-IP Telegram link is the primary recovery path. DNS-based links are
+   optional convenience.
+3. The FakeTLS front domain is an explicit operator choice and can be changed on
+   later rotations.
+4. Sponsored placement / adtag support is intentionally out of scope.
 
-## Decision Output
+## Remaining Follow-Up
 
-The follow-up recommendation should end in one of three outcomes:
+Further work should focus on:
 
-1. Stay on official MTProxy and keep hardening docs/operator guidance only.
-2. Extend this repo with a stronger runtime mode while preserving the current
-   official path.
-3. Replace the runtime in a dedicated follow-up migration if the censorship
-   resistance gain is worth the extra operational risk.
+1. Better front-domain selection guidance for different regions / providers.
+2. Faster ban recovery automation around DNS repointing and old-host cleanup.
+3. Extra verification that the chosen front domains still work acceptably from
+   the target networks.

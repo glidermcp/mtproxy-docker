@@ -1,11 +1,9 @@
 services:
-  mtproxy:
-    image: ${MTPROXY_IMAGE:-ghcr.io/glidermcp/mtproxy-docker:latest}
-    container_name: mtproxy
+  mtg:
+    image: ${MTG_IMAGE:-ghcr.io/glidermcp/mtproxy-docker:latest}
+    container_name: mtg
     restart: unless-stopped
     ports:
       - "443:443/tcp"
-    env_file:
-      - ./mtproxy.env
     volumes:
-      - ./data:/data
+      - ./mtg.toml:/config.toml:ro

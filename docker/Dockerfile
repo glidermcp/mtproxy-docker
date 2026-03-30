@@ -1,30 +1,17 @@
-FROM debian:trixie-slim AS build
+FROM golang:1.24-bookworm AS build
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        git \
-        libssl-dev \
-        zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+ARG MTG_VERSION=v2.1.7
 
-WORKDIR /src
-
-RUN git clone --depth 1 https://github.com/TelegramMessenger/MTProxy.git . \
-    && make \
-    && strip objs/bin/mtproto-proxy
+RUN CGO_ENABLED=0 go install "github.com/9seconds/mtg/v2@${MTG_VERSION}"
 
 FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bash \
         ca-certificates \
-        curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /src/objs/bin/mtproto-proxy /mtproto-proxy
-COPY --chmod=755 env.sh secrets.sh entrypoint.sh tg-config-updater.sh /
+COPY --from=build /go/bin/mtg /usr/local/bin/mtg
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["mtg"]
+CMD ["run", "/config.toml"]

@@ -26,34 +26,25 @@ first_existing_admin_key() {
   return 1
 }
 
-PUBLIC_HOST="${PUBLIC_HOST:-mtproxy.example.com}"
-DEPLOY_USER="${DEPLOY_USER:-deploy}"
-DEPLOY_SSH_PRIVATE_KEY_FILE="${DEPLOY_SSH_PRIVATE_KEY_FILE:-${HOME}/.ssh/mtproxy-actions}"
-DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${DEPLOY_SSH_PRIVATE_KEY_FILE}.pub}"
-ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
-
-ensure_deploy_key() {
-  if [[ -f "$DEPLOY_SSH_PRIVATE_KEY_FILE" && -f "$DEPLOY_SSH_PUBLIC_KEY_FILE" ]]; then
-    return 0
-  fi
-
-  ssh-keygen -t ed25519 -f "$DEPLOY_SSH_PRIVATE_KEY_FILE" -C gh-mtproxy-actions -N "" >/dev/null
-}
-
 repo_slug() {
   git remote get-url origin \
     | sed -E 's#(git@github.com:|https://github.com/)##' \
     | sed -E 's#\.git$##'
 }
 
-ensure_deploy_key
+DEPLOY_USER="${DEPLOY_USER:-deploy}"
+DEPLOY_SSH_PRIVATE_KEY_FILE="${DEPLOY_SSH_PRIVATE_KEY_FILE:-${HOME}/.ssh/mtproxy-actions}"
+DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${DEPLOY_SSH_PRIVATE_KEY_FILE}.pub}"
+ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
+SERVER_NAME="${SERVER_NAME:-mtg-$(date -u +%Y%m%d%H%M%S)}"
 
 [[ -f "$ADMIN_SSH_PUBLIC_KEY_FILE" ]] || die "Missing admin SSH public key: $ADMIN_SSH_PUBLIC_KEY_FILE"
+[[ -f "$DEPLOY_SSH_PUBLIC_KEY_FILE" ]] || die "Missing deploy SSH public key: $DEPLOY_SSH_PUBLIC_KEY_FILE"
 
 provision_output="$(
   ADMIN_SSH_PUBLIC_KEY_FILE="$ADMIN_SSH_PUBLIC_KEY_FILE" \
   DEPLOY_SSH_PUBLIC_KEY_FILE="$DEPLOY_SSH_PUBLIC_KEY_FILE" \
-  PUBLIC_HOST="$PUBLIC_HOST" \
+  SERVER_NAME="$SERVER_NAME" \
   "${SCRIPT_DIR}/provision-hetzner.sh"
 )"
 
@@ -76,14 +67,14 @@ fi
 
 cat <<EOF
 
-GitHub secrets updated for ${repo}.
+GitHub deploy target rotated to ${SERVER_NAME} (${server_ip}).
 
-Remaining manual step:
-1. SSH to ${server_ip} with your personal key
-2. Edit /opt/mtproxy/mtg.toml with the real mtg values
-3. Validate direct-IP access, then update DNS if you want a stable hostname:
+Next steps:
+1. Copy / create /opt/mtproxy/mtg.toml on ${server_ip}
+2. Validate direct-IP access with:
    PUBLIC_IPV4=${server_ip} ${SCRIPT_DIR}/print-access-links.sh /opt/mtproxy/mtg.toml
-4. Trigger the Deploy Production workflow in GitHub Actions
-5. Repoint DNS when you are satisfied:
+3. Repoint DNS when you are satisfied:
    DNS_RECORD_CONTENT=${server_ip} ${SCRIPT_DIR}/upsert-cloudflare-dns.sh
+4. Trigger the Deploy Production workflow in GitHub Actions
+5. Remove the old Hetzner host only after the new one is working
 EOF
