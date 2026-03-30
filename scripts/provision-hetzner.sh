@@ -55,7 +55,7 @@ require_command hcloud
 require_command ssh-keyscan
 require_command ssh-keygen
 
-SERVER_NAME="${SERVER_NAME:-mtproxy-prod}"
+SERVER_NAME="${SERVER_NAME:-mtg-prod}"
 SERVER_TYPE="${SERVER_TYPE:-cx23}"
 SERVER_LOCATION="${SERVER_LOCATION:-hel1}"
 SERVER_IMAGE="${SERVER_IMAGE:-ubuntu-24.04}"
@@ -123,7 +123,7 @@ Deploy user: ${DEPLOY_USER}
 
 Next steps:
 1. Run scripts/upsert-cloudflare-dns.sh with DNS_RECORD_CONTENT=${server_ip}
-2. Edit /opt/mtproxy/mtproxy.env on the server and set real MTProxy values
+2. Edit /opt/mtproxy/mtg.toml on the server and set real mtg values
 3. Add GitHub Actions secrets:
    PROD_HOST=${server_ip}
    PROD_USER=${DEPLOY_USER}

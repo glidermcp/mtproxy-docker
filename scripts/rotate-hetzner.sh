@@ -26,34 +26,25 @@ first_existing_admin_key() {
   return 1
 }
 
-PUBLIC_HOST="${PUBLIC_HOST:-mtproxy.example.com}"
-DEPLOY_USER="${DEPLOY_USER:-deploy}"
-DEPLOY_SSH_PRIVATE_KEY_FILE="${DEPLOY_SSH_PRIVATE_KEY_FILE:-${HOME}/.ssh/mtproxy-actions}"
-DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${DEPLOY_SSH_PRIVATE_KEY_FILE}.pub}"
-ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
-
-ensure_deploy_key() {
-  if [[ -f "$DEPLOY_SSH_PRIVATE_KEY_FILE" && -f "$DEPLOY_SSH_PUBLIC_KEY_FILE" ]]; then
-    return 0
-  fi
-
-  ssh-keygen -t ed25519 -f "$DEPLOY_SSH_PRIVATE_KEY_FILE" -C gh-mtproxy-actions -N "" >/dev/null
-}
-
 repo_slug() {
   git remote get-url origin \
     | sed -E 's#(git@github.com:|https://github.com/)##' \
     | sed -E 's#\.git$##'
 }
 
-ensure_deploy_key
+DEPLOY_USER="${DEPLOY_USER:-deploy}"
+DEPLOY_SSH_PRIVATE_KEY_FILE="${DEPLOY_SSH_PRIVATE_KEY_FILE:-${HOME}/.ssh/mtproxy-actions}"
+DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${DEPLOY_SSH_PRIVATE_KEY_FILE}.pub}"
+ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
+SERVER_NAME="${SERVER_NAME:-mtg-$(date -u +%Y%m%d%H%M%S)}"
 
 [[ -f "$ADMIN_SSH_PUBLIC_KEY_FILE" ]] || die "Missing admin SSH public key: $ADMIN_SSH_PUBLIC_KEY_FILE"
+[[ -f "$DEPLOY_SSH_PUBLIC_KEY_FILE" ]] || die "Missing deploy SSH public key: $DEPLOY_SSH_PUBLIC_KEY_FILE"
 
 provision_output="$(
   ADMIN_SSH_PUBLIC_KEY_FILE="$ADMIN_SSH_PUBLIC_KEY_FILE" \
   DEPLOY_SSH_PUBLIC_KEY_FILE="$DEPLOY_SSH_PUBLIC_KEY_FILE" \
-  PUBLIC_HOST="$PUBLIC_HOST" \
+  SERVER_NAME="$SERVER_NAME" \
   "${SCRIPT_DIR}/provision-hetzner.sh"
 )"
 
@@ -64,26 +55,25 @@ host_fingerprint="$(printf '%s\n' "$provision_output" | awk -F'=' '/PROD_HOST_FI
 repo="$(repo_slug)"
 
 [[ -n "$server_ip" ]] || die "Failed to parse Public IPv4 from provisioning output"
+[[ -n "$host_fingerprint" ]] || die "Failed to capture a new SSH host fingerprint for ${server_ip}. Refusing to rotate PROD_HOST with a stale fingerprint."
+[[ "$host_fingerprint" != "<run ssh-keyscan later and add the ed25519 SHA256 fingerprint>" ]] || die "Hetzner provisioning did not return a usable SSH fingerprint for ${server_ip}. Refusing to rotate PROD_HOST until the new fingerprint is known."
 
 gh secret set PROD_HOST --repo "$repo" --body "$server_ip"
 gh secret set PROD_USER --repo "$repo" --body "$DEPLOY_USER"
 gh secret set PROD_PORT --repo "$repo" --body "22"
 gh secret set PROD_SSH_KEY --repo "$repo" < "$DEPLOY_SSH_PRIVATE_KEY_FILE"
-
-if [[ -n "$host_fingerprint" && "$host_fingerprint" != "<run ssh-keyscan later and add the ed25519 SHA256 fingerprint>" ]]; then
-  gh secret set PROD_HOST_FINGERPRINT --repo "$repo" --body "$host_fingerprint"
-fi
+gh secret set PROD_HOST_FINGERPRINT --repo "$repo" --body "$host_fingerprint"
 
 cat <<EOF
 
-GitHub secrets updated for ${repo}.
+GitHub deploy target rotated to ${SERVER_NAME} (${server_ip}).
 
-Remaining manual step:
-1. SSH to ${server_ip} with your personal key
-2. Edit /opt/mtproxy/mtg.toml with the real mtg values
-3. Validate direct-IP access, then update DNS if you want a stable hostname:
+Next steps:
+1. Copy / create /opt/mtproxy/mtg.toml on ${server_ip}
+2. Validate direct-IP access with:
    PUBLIC_IPV4=${server_ip} ${SCRIPT_DIR}/print-access-links.sh /opt/mtproxy/mtg.toml
-4. Trigger the Deploy Production workflow in GitHub Actions
-5. Repoint DNS when you are satisfied:
+3. Repoint DNS when you are satisfied:
    DNS_RECORD_CONTENT=${server_ip} ${SCRIPT_DIR}/upsert-cloudflare-dns.sh
+4. Trigger the Deploy Production workflow in GitHub Actions
+5. Remove the old Hetzner host only after the new one is working
 EOF

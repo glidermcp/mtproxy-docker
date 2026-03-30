@@ -1,0 +1,16 @@
+# Native mtg configuration for a single FakeTLS proxy endpoint.
+#
+# Generate a real secret with:
+#   scripts/generate-mtg-secret.sh storage.googleapis.com
+#
+# Pick the front domain intentionally. It is encoded into the secret and can be
+# changed when you rotate hosts or want to try a different camouflage target.
+
+secret = "ee367a189aee18fa31c190054efd4a8e9573746f726167652e676f6f676c65617069732e636f6d"
+bind-to = "0.0.0.0:443"
+prefer-ip = "prefer-ipv4"
+concurrency = 8192
+
+# Optional: set this explicitly if mtg cannot auto-detect the public IPv4 when
+# running `mtg access`.
+# public-ipv4 = "203.0.113.10"

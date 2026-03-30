@@ -21,15 +21,17 @@ write_files:
       KbdInteractiveAuthentication no
       PubkeyAuthentication yes
       AllowUsers __DEPLOY_USER__
-  - path: /opt/mtproxy/mtproxy.env
+  - path: /opt/mtproxy/mtg.toml
     owner: __DEPLOY_USER__:__DEPLOY_USER__
     permissions: "0640"
     content: |
       # Fill in the real values before running the GitHub deploy workflow.
-      MTPROXY_PUBLIC_HOST=mtproxy.example.com
-      # MTPROXY_NAT_PUBLIC_IP=203.0.113.10
-      # MTPROXY_SECRET_FILE=/data/mtproxy-secret
-      # MTPROXY_SPONSORED_TAG=
+      # Generate a per-host secret with:
+      #   scripts/generate-mtg-secret.sh <front-domain>
+      secret = "REPLACE_WITH_UNIQUE_FAKE_TLS_SECRET"
+      bind-to = "0.0.0.0:443"
+      prefer-ip = "prefer-ipv4"
+      # public-ipv4 = "203.0.113.10"
 
 runcmd:
   - apt-get update
@@ -37,6 +39,5 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - usermod -aG docker __DEPLOY_USER__
   - install -d -m 0755 -o __DEPLOY_USER__ -g __DEPLOY_USER__ /opt/mtproxy
-  - install -d -m 0755 -o __DEPLOY_USER__ -g __DEPLOY_USER__ /opt/mtproxy/data
   - sshd -t
   - systemctl reload ssh
