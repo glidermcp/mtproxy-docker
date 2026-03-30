@@ -26,7 +26,7 @@ write_files:
     permissions: "0640"
     content: |
       # Fill in the real values before running the GitHub deploy workflow.
-      MTPROXY_PUBLIC_HOST=life.wearbrands.vip
+      MTPROXY_PUBLIC_HOST=mtproxy.example.com
       # MTPROXY_NAT_PUBLIC_IP=203.0.113.10
       # MTPROXY_SECRET_FILE=/data/mtproxy-secret
       # MTPROXY_SPONSORED_TAG=

@@ -26,7 +26,7 @@ first_existing_admin_key() {
   return 1
 }
 
-PUBLIC_HOST="${PUBLIC_HOST:-life.wearbrands.vip}"
+PUBLIC_HOST="${PUBLIC_HOST:-mtproxy.example.com}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 DEPLOY_SSH_PRIVATE_KEY_FILE="${DEPLOY_SSH_PRIVATE_KEY_FILE:-${HOME}/.ssh/mtproxy-actions}"
 DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${DEPLOY_SSH_PRIVATE_KEY_FILE}.pub}"

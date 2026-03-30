@@ -50,7 +50,7 @@ This guide assumes that you're performing the steps on a Linux machine.
           - ./data:/data
         environment:
           # REQUIRED: public hostname clients will use
-          MTPROXY_PUBLIC_HOST: "life.wearbrands.vip"
+          MTPROXY_PUBLIC_HOST: "mtproxy.example.com"
           # REQUIRED when using a hostname instead of a raw IPv4
           MTPROXY_NAT_PUBLIC_IP: "203.0.113.10"
           # RECOMMENDED: point at the mounted host secret file
@@ -98,11 +98,11 @@ requirements in front of your traffic.
 Recommended production profile for this repo:
 
 1. Run MTProxy on Hetzner.
-2. Point `life.wearbrands.vip` to the Hetzner IPv4 with a DNS-only A record.
+2. Point `mtproxy.example.com` to the Hetzner IPv4 with a DNS-only A record.
 3. Keep client traffic on TCP `443`.
 4. Use a raw 32-hex server secret and let the printed client link add the
    `dd` padding prefix.
-5. If you want sponsorship, configure `@wear_brands_spain` in `@MTProxybot`
+5. If you want sponsorship, configure your public channel or group in `@MTProxybot`
    and paste the returned tag into `MTPROXY_SPONSORED_TAG`.
 
 If you use a hostname in `MTPROXY_PUBLIC_HOST`, set `MTPROXY_NAT_PUBLIC_IP`
@@ -118,7 +118,7 @@ setup:
    dedicated `deploy` user.
 2. [scripts/upsert-cloudflare-dns.sh](./scripts/upsert-cloudflare-dns.sh)
    creates or updates the DNS-only Cloudflare record for
-   `life.wearbrands.vip`.
+   your chosen hostname.
 
 Provisioning prerequisites on your machine:
 
@@ -145,8 +145,8 @@ Recommended one-time provisioning flow:
    hcloud context create mtproxy
    hcloud context use mtproxy
    ```
-2. Create a Cloudflare API token with DNS edit permission for `wearbrands.vip`
-   and export `CLOUDFLARE_API_TOKEN`.
+2. Create a Cloudflare API token with DNS edit permission for your zone, such
+   as `example.com`, and export `CLOUDFLARE_API_TOKEN`.
 3. Export your Cloudflare zone id as `CLOUDFLARE_ZONE_ID`.
 4. Run the Hetzner provisioning script:
    ```bash
@@ -201,7 +201,8 @@ and then fall back to `id_rsa.pub`.
 
 Cloudflare is supported only for DNS in this setup.
 
-1. Set `life.wearbrands.vip` to DNS-only. Do not orange-cloud this record.
+1. Set your MTProxy hostname, such as `mtproxy.example.com`, to DNS-only. Do
+   not orange-cloud this record.
 2. Cloudflare Containers are not a fit for MTProxy because they do not expose a
    direct public MTProto TCP endpoint that Telegram clients can use.
 3. Cloudflare Tunnel public hostnames are not a fit for normal Telegram
@@ -240,7 +241,8 @@ Remote host expectations:
 3. The remote user can run `docker compose`.
 4. `/opt/mtproxy/.env` is managed by the deploy workflow to persist the selected
    `MTPROXY_IMAGE` tag across later `docker compose up -d` runs.
-5. `life.wearbrands.vip` already resolves to the Hetzner host in DNS-only mode.
+5. Your chosen MTProxy hostname already resolves to the Hetzner host in
+   DNS-only mode.
 6. SSH is key-only and restricted to `deploy`.
 
 SSH hardening policy:
@@ -282,7 +284,8 @@ Each secret must be 32 hex digits. The repo also accepts `dd` + 32 hex digits
 as input for compatibility, but it strips the `dd` prefix before starting the
 server because upstream `mtproto-proxy` expects raw 32-hex secrets.
 
-For a public deployment on `life.wearbrands.vip`, padded client links are the
+For a public deployment on a hostname such as `mtproxy.example.com`, padded
+client links are the
 recommended default and are printed automatically.
 
 You can generate a plain secret manually:
@@ -315,8 +318,8 @@ Proxy tag from `@MTProxybot` for sponsored placement (`-P` argument).
 There is no separate upstream "sponsored channel" server setting. MTProxy uses
 the bot-issued proxy tag.
 
-If you want the sponsored destination to be `@wear_brands_spain`, configure it
-in `@MTProxybot` first, then copy the returned proxy tag into
+If you want sponsored placement, configure your public channel or group in
+`@MTProxybot` first, then copy the returned proxy tag into
 `MTPROXY_SPONSORED_TAG`.
 
 #### `MTPROXY_AUTO_UPDATE_TELEGRAM_FILES` (default `1`)

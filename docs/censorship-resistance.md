@@ -4,7 +4,7 @@ This repo keeps the official Telegram MTProxy server as the production runtime
 for now. The near-term deployment target is:
 
 1. Hetzner-hosted MTProxy
-2. `life.wearbrands.vip` as the public hostname
+2. a public hostname such as `mtproxy.example.com`
 3. Cloudflare in DNS-only mode
 4. TCP `443`
 5. Padded client secrets
@@ -24,7 +24,7 @@ Any alternative runtime evaluation should answer:
    the official MTProxy server?
 3. Can it still be deployed cleanly from this Docker-based repo?
 4. Can it keep the same public deployment shape:
-   `life.wearbrands.vip`, port `443`, Hetzner origin, Cloudflare DNS-only?
+   `mtproxy.example.com`, port `443`, Hetzner origin, Cloudflare DNS-only?
 5. Would switching require replacing the current image entirely, or can the
    current repo be extended?
 
