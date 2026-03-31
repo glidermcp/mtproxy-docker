@@ -10,62 +10,112 @@ on:
 
 permissions:
   contents: read
-  packages: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
       DEPLOY_PATH: /opt/mtproxy
+      DEPLOY_USER: ${{ vars.PROD_DEPLOY_USER }}
+      PROD_PUBLIC_HOST: ${{ vars.PROD_PUBLIC_HOST }}
       IMAGE_NAME: ghcr.io/${{ github.repository }}:${{ inputs.image_tag || 'latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Copy deployment manifest
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || '22' }}
-          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
-          source: deploy/compose.yml
-          target: ${{ env.DEPLOY_PATH }}
-          strip_components: 1
+      - name: Validate workflow configuration
+        run: |
+          set -euo pipefail
+          [[ -n "${PROD_PUBLIC_HOST}" ]] || {
+            echo "Missing required repository variable PROD_PUBLIC_HOST" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.PROD_DEPLOY_SSH_PRIVATE_KEY }}" ]] || {
+            echo "Missing required secret PROD_DEPLOY_SSH_PRIVATE_KEY" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.PROD_MTG_SECRET }}" ]] || {
+            echo "Missing required secret PROD_MTG_SECRET" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.GHCR_PULL_USERNAME }}" ]] || {
+            echo "Missing required secret GHCR_PULL_USERNAME" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.GHCR_PULL_TOKEN }}" ]] || {
+            echo "Missing required secret GHCR_PULL_TOKEN" >&2
+            exit 1
+          }
+
+      - name: Prepare SSH key
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ secrets.PROD_DEPLOY_SSH_PRIVATE_KEY }}' > deploy_key
+          chmod 600 deploy_key
+
+      - name: Resolve production host
+        id: resolve
+        env:
+          DEPLOY_USER_FALLBACK: deploy
+        run: |
+          set -euo pipefail
+          DEPLOY_USER="${DEPLOY_USER:-$DEPLOY_USER_FALLBACK}"
+          target_ip="$(python3 - <<'PY'
+          import os
+          import socket
+
+          print(socket.gethostbyname(os.environ["PROD_PUBLIC_HOST"]))
+          PY
+          )"
+          ssh-keyscan -t ed25519 "${PROD_PUBLIC_HOST}" > known_hosts
+          chmod 600 known_hosts
+          {
+            echo "target_host=${PROD_PUBLIC_HOST}"
+            echo "target_ip=${target_ip}"
+            echo "deploy_user=${DEPLOY_USER}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render mtg config
+        env:
+          MTG_SECRET: ${{ secrets.PROD_MTG_SECRET }}
+          PUBLIC_IPV4: ${{ steps.resolve.outputs.target_ip }}
+        run: |
+          set -euo pipefail
+          ./scripts/render-mtg-config.sh > mtg.toml
+
+      - name: Copy deployment files
+        run: |
+          set -euo pipefail
+          scp -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            deploy/compose.yml mtg.toml \
+            "${{ steps.resolve.outputs.deploy_user }}@${{ steps.resolve.outputs.target_host }}:${DEPLOY_PATH}/"
 
       - name: Deploy container
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || '22' }}
-          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
-          envs: DEPLOY_PATH,IMAGE_NAME
-          script: |
-            set -euo pipefail
-
-            test -f "$DEPLOY_PATH/mtg.toml"
-
-            cd "$DEPLOY_PATH"
-            awk '
-              BEGIN { set = 0 }
-              /^MTG_IMAGE=/ {
-                print "MTG_IMAGE=" image
-                set = 1
-                next
-              }
-              { print }
-              END {
-                if (!set) {
-                  print "MTG_IMAGE=" image
-                }
-              }
-            ' image="$IMAGE_NAME" .env 2>/dev/null > .env.tmp || printf 'MTG_IMAGE=%s\n' "$IMAGE_NAME" > .env.tmp
-            mv .env.tmp .env
-            docker compose pull
-            docker compose up -d
+        env:
+          GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          set -euo pipefail
+          ssh -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            "${{ steps.resolve.outputs.deploy_user }}@${{ steps.resolve.outputs.target_host }}" \
+            "
+              set -euo pipefail
+              printf '%s\n' '${IMAGE_NAME}' > /tmp/mtg-image-name
+              printf '%s\n' '${GHCR_PULL_TOKEN}' | docker login ghcr.io -u '${GHCR_PULL_USERNAME}' --password-stdin
+              printf 'MTG_IMAGE=%s\n' \"\$(cat /tmp/mtg-image-name)\" > '${DEPLOY_PATH}/.env'
+              cd '${DEPLOY_PATH}'
+              docker compose -f '${DEPLOY_PATH}/compose.yml' pull
+              docker compose -f '${DEPLOY_PATH}/compose.yml' up -d
+              docker ps --filter name=mtg --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+            "
 
       - name: Report deployment
-        run: echo "Deployed ${IMAGE_NAME} to ${DEPLOY_PATH}"
+        run: echo "Deployed ${IMAGE_NAME} to ${PROD_PUBLIC_HOST}"

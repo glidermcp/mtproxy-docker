@@ -60,30 +60,26 @@ provision_output="$(
 printf '%s\n' "$provision_output"
 
 server_ip="$(printf '%s\n' "$provision_output" | awk -F': ' '/^Public IPv4:/ {print $2}')"
-host_fingerprint="$(printf '%s\n' "$provision_output" | awk -F'=' '/PROD_HOST_FINGERPRINT=/ {print $2}')"
 repo="$(repo_slug)"
 
 [[ -n "$server_ip" ]] || die "Failed to parse Public IPv4 from provisioning output"
 
-gh secret set PROD_HOST --repo "$repo" --body "$server_ip"
-gh secret set PROD_USER --repo "$repo" --body "$DEPLOY_USER"
-gh secret set PROD_PORT --repo "$repo" --body "22"
-gh secret set PROD_SSH_KEY --repo "$repo" < "$DEPLOY_SSH_PRIVATE_KEY_FILE"
-
-if [[ -n "$host_fingerprint" && "$host_fingerprint" != "<run ssh-keyscan later and add the ed25519 SHA256 fingerprint>" ]]; then
-  gh secret set PROD_HOST_FINGERPRINT --repo "$repo" --body "$host_fingerprint"
-fi
+gh variable set PROD_PUBLIC_HOST --repo "$repo" --body "$PUBLIC_HOST"
+gh variable set PROD_DEPLOY_USER --repo "$repo" --body "$DEPLOY_USER"
+gh secret set PROD_DEPLOY_SSH_PRIVATE_KEY --repo "$repo" < "$DEPLOY_SSH_PRIVATE_KEY_FILE"
+gh secret set PROD_DEPLOY_SSH_PUBLIC_KEY --repo "$repo" < "$DEPLOY_SSH_PUBLIC_KEY_FILE"
 
 cat <<EOF
 
 GitHub secrets updated for ${repo}.
 
-Remaining manual step:
-1. SSH to ${server_ip} with your personal key
-2. Edit /opt/mtproxy/mtg.toml with the real mtg values
-3. Validate direct-IP access, then update DNS if you want a stable hostname:
-   PUBLIC_IPV4=${server_ip} ${SCRIPT_DIR}/print-access-links.sh /opt/mtproxy/mtg.toml
-4. Trigger the Deploy Production workflow in GitHub Actions
-5. Repoint DNS when you are satisfied:
-   DNS_RECORD_CONTENT=${server_ip} ${SCRIPT_DIR}/upsert-cloudflare-dns.sh
+Bootstrap completed for ${server_ip}.
+
+Next steps:
+1. Add the remaining GitHub Actions secrets:
+   HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID, PROD_MTG_SECRET, GHCR_PULL_USERNAME, GHCR_PULL_TOKEN
+2. Set any optional GitHub Actions variables if you want non-default Hetzner sizing:
+   PROD_SERVER_NAME_PREFIX, PROD_SERVER_TYPE, PROD_SERVER_LOCATION, PROD_SERVER_IMAGE
+3. Trigger the Provision Production workflow for future zero-touch rotations
+4. Trigger the Deploy Production workflow for idempotent redeploys to ${PUBLIC_HOST}
 EOF

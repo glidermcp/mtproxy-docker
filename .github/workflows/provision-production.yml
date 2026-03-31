@@ -1,0 +1,252 @@
+name: Provision Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "GHCR image tag to deploy after provisioning"
+        required: false
+        default: latest
+      delete_previous_server:
+        description: "Delete the old Hetzner server after successful cutover"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-provision
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_PATH: /opt/mtproxy
+      DEPLOY_USER: ${{ vars.PROD_DEPLOY_USER }}
+      PROD_PUBLIC_HOST: ${{ vars.PROD_PUBLIC_HOST }}
+      SERVER_NAME_PREFIX: ${{ vars.PROD_SERVER_NAME_PREFIX }}
+      SERVER_TYPE: ${{ vars.PROD_SERVER_TYPE }}
+      SERVER_LOCATION: ${{ vars.PROD_SERVER_LOCATION }}
+      SERVER_IMAGE: ${{ vars.PROD_SERVER_IMAGE }}
+      IMAGE_NAME: ghcr.io/${{ github.repository }}:${{ inputs.image_tag || 'latest' }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Hetzner CLI
+        uses: hetznercloud/setup-hcloud@v1
+
+      - name: Normalize defaults
+        run: |
+          {
+            echo "DEPLOY_USER=${DEPLOY_USER:-deploy}"
+            echo "SERVER_NAME_PREFIX=${SERVER_NAME_PREFIX:-mtg-prod}"
+            echo "SERVER_TYPE=${SERVER_TYPE:-cx23}"
+            echo "SERVER_LOCATION=${SERVER_LOCATION:-hel1}"
+            echo "SERVER_IMAGE=${SERVER_IMAGE:-ubuntu-24.04}"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate workflow configuration
+        env:
+          HCLOUD_TOKEN_VALUE: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID_VALUE: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          PROD_MTG_SECRET_VALUE: ${{ secrets.PROD_MTG_SECRET }}
+          PROD_DEPLOY_SSH_PRIVATE_KEY_VALUE: ${{ secrets.PROD_DEPLOY_SSH_PRIVATE_KEY }}
+          PROD_DEPLOY_SSH_PUBLIC_KEY_VALUE: ${{ secrets.PROD_DEPLOY_SSH_PUBLIC_KEY }}
+          GHCR_PULL_USERNAME_VALUE: ${{ secrets.GHCR_PULL_USERNAME }}
+          GHCR_PULL_TOKEN_VALUE: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${PROD_PUBLIC_HOST}" ]] || {
+            echo "Missing required repository variable PROD_PUBLIC_HOST" >&2
+            exit 1
+          }
+          for secret_name in \
+            HCLOUD_TOKEN \
+            CLOUDFLARE_API_TOKEN \
+            CLOUDFLARE_ZONE_ID \
+            PROD_MTG_SECRET \
+            PROD_DEPLOY_SSH_PRIVATE_KEY \
+            PROD_DEPLOY_SSH_PUBLIC_KEY \
+            GHCR_PULL_USERNAME \
+            GHCR_PULL_TOKEN
+          do
+            case "${secret_name}" in
+              HCLOUD_TOKEN) value="${HCLOUD_TOKEN_VALUE}" ;;
+              CLOUDFLARE_API_TOKEN) value="${CLOUDFLARE_API_TOKEN_VALUE}" ;;
+              CLOUDFLARE_ZONE_ID) value="${CLOUDFLARE_ZONE_ID_VALUE}" ;;
+              PROD_MTG_SECRET) value="${PROD_MTG_SECRET_VALUE}" ;;
+              PROD_DEPLOY_SSH_PRIVATE_KEY) value="${PROD_DEPLOY_SSH_PRIVATE_KEY_VALUE}" ;;
+              PROD_DEPLOY_SSH_PUBLIC_KEY) value="${PROD_DEPLOY_SSH_PUBLIC_KEY_VALUE}" ;;
+              GHCR_PULL_USERNAME) value="${GHCR_PULL_USERNAME_VALUE}" ;;
+              GHCR_PULL_TOKEN) value="${GHCR_PULL_TOKEN_VALUE}" ;;
+            esac
+            [[ -n "${value}" ]] || {
+              echo "Missing required secret ${secret_name}" >&2
+              exit 1
+            }
+          done
+
+      - name: Prepare SSH material
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ secrets.PROD_DEPLOY_SSH_PRIVATE_KEY }}' > deploy_key
+          printf '%s\n' '${{ secrets.PROD_DEPLOY_SSH_PUBLIC_KEY }}' > deploy_key.pub
+          chmod 600 deploy_key
+          chmod 644 deploy_key.pub
+
+      - name: Resolve old production target
+        id: old
+        run: |
+          set -euo pipefail
+          old_ip="$(
+            PROD_PUBLIC_HOST="${PROD_PUBLIC_HOST}" python3 - <<'PY'
+            import os
+            import socket
+            import sys
+
+            host = os.environ["PROD_PUBLIC_HOST"]
+            try:
+                print(socket.gethostbyname(host))
+            except OSError:
+                sys.exit(0)
+            PY
+          )"
+
+          old_name="$(
+            OLD_IP="${old_ip}" python3 - <<'PY'
+            import json
+            import os
+            import subprocess
+            import sys
+
+            old_ip = os.environ.get("OLD_IP", "").strip()
+            if not old_ip:
+                sys.exit(0)
+
+            servers = json.loads(subprocess.check_output(["hcloud", "server", "list", "-o", "json"], text=True))
+            for server in servers:
+                ipv4 = (((server.get("public_net") or {}).get("ipv4") or {}).get("ip") or "").strip()
+                if ipv4 == old_ip:
+                    print(server["name"])
+                    break
+            PY
+          )" || true
+
+          {
+            echo "old_ip=${old_ip}"
+            echo "old_name=${old_name}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render cloud-init
+        run: |
+          set -euo pipefail
+          AUTHORIZED_KEYS_FILE="$PWD/deploy_key.pub" \
+          DEPLOY_USER="${DEPLOY_USER}" \
+          ./scripts/render-cloud-init.sh > cloud-init.yaml
+
+      - name: Provision new server
+        id: provision
+        run: |
+          set -euo pipefail
+          server_name="${SERVER_NAME_PREFIX}-${GITHUB_RUN_ID}"
+          hcloud server create \
+            --name "${server_name}" \
+            --type "${SERVER_TYPE}" \
+            --location "${SERVER_LOCATION}" \
+            --image "${SERVER_IMAGE}" \
+            --user-data-from-file cloud-init.yaml >/dev/null
+
+          server_ip="$(hcloud server ip "${server_name}")"
+          [[ -n "${server_ip}" ]] || {
+            echo "Failed to resolve IPv4 for ${server_name}" >&2
+            exit 1
+          }
+
+          for _ in $(seq 1 30); do
+            ssh-keyscan -t ed25519 "${server_ip}" > known_hosts.new 2>/dev/null || true
+            if [[ -s known_hosts.new ]]; then
+              mv known_hosts.new known_hosts
+              break
+            fi
+            sleep 2
+          done
+
+          [[ -s known_hosts ]] || {
+            echo "Failed to capture SSH host key for ${server_ip}" >&2
+            exit 1
+          }
+
+          {
+            echo "server_name=${server_name}"
+            echo "server_ip=${server_ip}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render mtg config
+        env:
+          MTG_SECRET: ${{ secrets.PROD_MTG_SECRET }}
+          PUBLIC_IPV4: ${{ steps.provision.outputs.server_ip }}
+        run: |
+          set -euo pipefail
+          ./scripts/render-mtg-config.sh > mtg.toml
+
+      - name: Copy deployment files
+        run: |
+          set -euo pipefail
+          scp -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            deploy/compose.yml mtg.toml \
+            "${DEPLOY_USER}@${{ steps.provision.outputs.server_ip }}:${DEPLOY_PATH}/"
+
+      - name: Deploy container on new host
+        env:
+          GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          set -euo pipefail
+          ssh -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            "${DEPLOY_USER}@${{ steps.provision.outputs.server_ip }}" \
+            "
+              set -euo pipefail
+              printf '%s\n' '${GHCR_PULL_TOKEN}' | docker login ghcr.io -u '${GHCR_PULL_USERNAME}' --password-stdin
+              printf 'MTG_IMAGE=%s\n' '${IMAGE_NAME}' > '${DEPLOY_PATH}/.env'
+              cd '${DEPLOY_PATH}'
+              docker compose -f '${DEPLOY_PATH}/compose.yml' pull
+              docker compose -f '${DEPLOY_PATH}/compose.yml' up -d
+              docker ps --filter name=mtg --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+              ss -ltn sport = :443
+            "
+
+      - name: Update DNS
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          DNS_RECORD_NAME: ${{ vars.PROD_PUBLIC_HOST }}
+          DNS_RECORD_CONTENT: ${{ steps.provision.outputs.server_ip }}
+        run: |
+          set -euo pipefail
+          ./scripts/upsert-cloudflare-dns.sh
+
+      - name: Delete previous server
+        if: inputs.delete_previous_server == 'true' && steps.old.outputs.old_name != ''
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.old.outputs.old_name }}" == "${{ steps.provision.outputs.server_name }}" ]]; then
+            exit 0
+          fi
+          hcloud server delete "${{ steps.old.outputs.old_name }}"
+
+      - name: Report provisioning
+        run: |
+          cat <<EOF
+          Provisioned production host ${{ steps.provision.outputs.server_name }} at ${{ steps.provision.outputs.server_ip }}
+          Public host: ${PROD_PUBLIC_HOST}
+          Image: ${IMAGE_NAME}
+          EOF

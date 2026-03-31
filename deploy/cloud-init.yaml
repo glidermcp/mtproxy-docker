@@ -8,8 +8,7 @@ users:
       - sudo
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
-      - __ADMIN_SSH_PUBLIC_KEY__
-      - __DEPLOY_SSH_PUBLIC_KEY__
+      - __DEPLOY_SSH_AUTHORIZED_KEYS__
 
 write_files:
   - path: /etc/ssh/sshd_config.d/99-mtproxy-hardening.conf
@@ -21,18 +20,6 @@ write_files:
       KbdInteractiveAuthentication no
       PubkeyAuthentication yes
       AllowUsers __DEPLOY_USER__
-  - path: /opt/mtproxy/mtg.toml
-    owner: __DEPLOY_USER__:__DEPLOY_USER__
-    permissions: "0640"
-    content: |
-      # Fill in the real values before running the GitHub deploy workflow.
-      # Generate a per-host secret with:
-      #   scripts/generate-mtg-secret.sh <front-domain>
-      secret = "REPLACE_WITH_UNIQUE_FAKE_TLS_SECRET"
-      bind-to = "0.0.0.0:443"
-      prefer-ip = "prefer-ipv4"
-      # public-ipv4 = "203.0.113.10"
-
 runcmd:
   - apt-get update
   - apt-get install -y ca-certificates curl
