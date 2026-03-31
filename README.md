@@ -39,7 +39,6 @@ public IPv4 gets blocked.
      mtg:
        image: ghcr.io/glidermcp/mtproxy-docker:latest
        container_name: mtg
-       command: ["run", "--tcp-buffer=256KB", "/config.toml"]
        restart: unless-stopped
        ports:
          - "443:443/tcp"
@@ -87,8 +86,6 @@ Operational rules:
 3. The front domain is an explicit operator choice and can change on future
    rotations.
 4. Direct-IP links are the primary recovery path. Stable DNS is optional.
-5. The container runtime starts `mtg` with `--tcp-buffer=256KB` for better
-   throughput on Hetzner-hosted links.
 
 ## Hetzner Deployment
 

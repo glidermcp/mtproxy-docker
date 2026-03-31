@@ -2,7 +2,6 @@ services:
   mtg:
     image: ${MTG_IMAGE:-ghcr.io/glidermcp/mtproxy-docker:latest}
     container_name: mtg
-    command: ["run", "--tcp-buffer=256KB", "/config.toml"]
     restart: unless-stopped
     ports:
       - "443:443/tcp"
