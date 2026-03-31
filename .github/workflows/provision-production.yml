@@ -186,6 +186,26 @@ jobs:
             echo "server_ip=${server_ip}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Wait for cloud-init deploy readiness
+        run: |
+          set -euo pipefail
+
+          for _ in $(seq 1 30); do
+            if ssh -i deploy_key \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=known_hosts \
+              -o ConnectTimeout=5 \
+              "${DEPLOY_USER}@${{ steps.provision.outputs.server_ip }}" \
+              "test -d '${DEPLOY_PATH}' && command -v docker >/dev/null"
+            then
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for cloud-init to create ${DEPLOY_USER}, ${DEPLOY_PATH}, and docker on ${{ steps.provision.outputs.server_ip }}" >&2
+          exit 1
+
       - name: Render mtg config
         env:
           MTG_SECRET: ${{ secrets.PROD_MTG_SECRET }}
