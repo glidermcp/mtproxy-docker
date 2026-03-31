@@ -103,39 +103,9 @@ jobs:
         id: old
         run: |
           set -euo pipefail
-          old_ip="$(
-            PROD_PUBLIC_HOST="${PROD_PUBLIC_HOST}" python3 - <<'PY'
-            import os
-            import socket
-            import sys
+          old_ip="$(PROD_PUBLIC_HOST="${PROD_PUBLIC_HOST}" python3 -c 'import os, socket; print(socket.gethostbyname(os.environ["PROD_PUBLIC_HOST"]))' 2>/dev/null || true)"
 
-            host = os.environ["PROD_PUBLIC_HOST"]
-            try:
-                print(socket.gethostbyname(host))
-            except OSError:
-                sys.exit(0)
-            PY
-          )"
-
-          old_name="$(
-            OLD_IP="${old_ip}" python3 - <<'PY'
-            import json
-            import os
-            import subprocess
-            import sys
-
-            old_ip = os.environ.get("OLD_IP", "").strip()
-            if not old_ip:
-                sys.exit(0)
-
-            servers = json.loads(subprocess.check_output(["hcloud", "server", "list", "-o", "json"], text=True))
-            for server in servers:
-                ipv4 = (((server.get("public_net") or {}).get("ipv4") or {}).get("ip") or "").strip()
-                if ipv4 == old_ip:
-                    print(server["name"])
-                    break
-            PY
-          )" || true
+          old_name="$(OLD_IP="${old_ip}" python3 -c 'import json, os, subprocess; old_ip = os.environ.get("OLD_IP", "").strip(); servers = json.loads(subprocess.check_output(["hcloud", "server", "list", "-o", "json"], text=True)) if old_ip else []; print(next((server["name"] for server in servers if (((server.get("public_net") or {}).get("ipv4") or {}).get("ip") or "").strip() == old_ip), ""))' || true)"
 
           {
             echo "old_ip=${old_ip}"
