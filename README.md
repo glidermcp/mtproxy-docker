@@ -39,6 +39,7 @@ public IPv4 gets blocked.
      mtg:
        image: ghcr.io/glidermcp/mtproxy-docker:latest
        container_name: mtg
+       command: ["run", "--tcp-buffer=256KB", "/config.toml"]
        restart: unless-stopped
        ports:
          - "443:443/tcp"
@@ -86,6 +87,8 @@ Operational rules:
 3. The front domain is an explicit operator choice and can change on future
    rotations.
 4. Direct-IP links are the primary recovery path. Stable DNS is optional.
+5. The container runtime starts `mtg` with `--tcp-buffer=256KB` for better
+   throughput on Hetzner-hosted links.
 
 ## Hetzner Deployment
 
@@ -126,7 +129,8 @@ Automation entry points:
 2. `Provision Production` creates a new Hetzner host, installs config, deploys
    the container, updates DNS, and can remove the old host.
 3. `Deploy Production` redeploys the current production hostname without manual
-   SSH prep.
+   SSH prep and can optionally rotate the billed Primary IPv4 on the same
+   Hetzner server.
 
 How the zero-touch path works:
 
@@ -138,16 +142,24 @@ How the zero-touch path works:
 3. `Deploy Production` uses the current `PROD_PUBLIC_HOST`, fetches the live SSH
    host key at runtime, rewrites `mtg.toml` from secrets, and redeploys without
    any manual SSH bootstrap.
+4. If `Deploy Production` is run with `rotate_public_ip=true`, the workflow
+   keeps the same `PROD_MTG_SECRET`, powers the server off, swaps its billed
+   Primary IPv4, powers the server back on, redeploys to the new IPv4, checks
+   SSH plus TCP/443 reachability, updates DNS, and only then deletes the old
+   Primary IPv4.
 
 ## Rotation / Ban Recovery
 
-The intended recovery path is a fresh Hetzner host with a fresh IPv4.
+The intended recovery path is either a fresh Hetzner host with a fresh IPv4 or
+an in-place Primary IPv4 rotation on the current server.
 
 Preferred automated path:
 
 1. Run `Provision Production` when you want a fresh host and fresh IP.
-2. Run `Deploy Production` when you only want to redeploy the current active
-   host.
+2. Run `Deploy Production` when you want to redeploy the current active host.
+3. Run `Deploy Production` with `rotate_public_ip=true` when you want to keep
+   the same server, preserve the current MTG secret, leave IPv6 untouched, and
+   rotate only the billed Primary IPv4.
 
 Legacy local path:
 
@@ -157,11 +169,10 @@ scripts/rotate-hetzner.sh
 
 Recommended recovery order:
 
-1. Provision the new host.
+1. Choose either fresh-host provisioning or in-place Primary IPv4 rotation.
 2. Validate direct-IP Telegram access.
 3. Repoint DNS if you want to keep a stable hostname.
-4. Deploy or redeploy to the new host via GitHub Actions.
-5. Remove the old Hetzner host only after the new one works.
+4. Remove the old Hetzner resource only after the new path works.
 
 ## Cloudflare Notes
 
@@ -182,6 +193,16 @@ Remote host expectations:
 3. `/opt/mtproxy` exists and is writable by the deploy user.
 4. `/opt/mtproxy/.env` is managed by the deploy workflow and stores
    `MTG_IMAGE=...`.
+
+`Deploy Production` inputs:
+
+1. `image_tag`
+   GHCR image tag to deploy. Defaults to `latest`.
+2. `rotate_public_ip`
+   Defaults to `false`. When set to `true`, the workflow rotates the billed
+   Hetzner Primary IPv4 on the current server, keeps `PROD_MTG_SECRET`
+   unchanged, leaves IPv6 untouched, and updates DNS only after the new IPv4 is
+   reachable.
 
 ## Censorship Resistance
 
