@@ -7,65 +7,315 @@ on:
         description: "GHCR image tag to deploy"
         required: false
         default: latest
+      rotate_public_ip:
+        description: "Rotate the server's Primary IPv4 before deploy"
+        required: false
+        default: "false"
 
 permissions:
   contents: read
-  packages: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
       DEPLOY_PATH: /opt/mtproxy
+      DEPLOY_USER: ${{ vars.PROD_DEPLOY_USER }}
+      PROD_PUBLIC_HOST: ${{ vars.PROD_PUBLIC_HOST }}
       IMAGE_NAME: ghcr.io/${{ github.repository }}:${{ inputs.image_tag || 'latest' }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Copy deployment manifest
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || '22' }}
-          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
-          source: deploy/compose.yml
-          target: ${{ env.DEPLOY_PATH }}
-          strip_components: 1
+      - name: Validate workflow configuration
+        env:
+          HCLOUD_TOKEN_VALUE: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID_VALUE: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          [[ -n "${PROD_PUBLIC_HOST}" ]] || {
+            echo "Missing required repository variable PROD_PUBLIC_HOST" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.PROD_DEPLOY_SSH_PRIVATE_KEY }}" ]] || {
+            echo "Missing required secret PROD_DEPLOY_SSH_PRIVATE_KEY" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.PROD_MTG_SECRET }}" ]] || {
+            echo "Missing required secret PROD_MTG_SECRET" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.GHCR_PULL_USERNAME }}" ]] || {
+            echo "Missing required secret GHCR_PULL_USERNAME" >&2
+            exit 1
+          }
+          [[ -n "${{ secrets.GHCR_PULL_TOKEN }}" ]] || {
+            echo "Missing required secret GHCR_PULL_TOKEN" >&2
+            exit 1
+          }
+          if [[ "${{ inputs.rotate_public_ip }}" == "true" ]]; then
+            [[ -n "${HCLOUD_TOKEN_VALUE}" ]] || {
+              echo "Missing required secret HCLOUD_TOKEN" >&2
+              exit 1
+            }
+            [[ -n "${CLOUDFLARE_API_TOKEN_VALUE}" ]] || {
+              echo "Missing required secret CLOUDFLARE_API_TOKEN" >&2
+              exit 1
+            }
+            [[ -n "${CLOUDFLARE_ZONE_ID_VALUE}" ]] || {
+              echo "Missing required secret CLOUDFLARE_ZONE_ID" >&2
+              exit 1
+            }
+          fi
+
+      - name: Set up Hetzner CLI
+        if: inputs.rotate_public_ip == 'true'
+        uses: hetznercloud/setup-hcloud@v1
+
+      - name: Prepare SSH key
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ secrets.PROD_DEPLOY_SSH_PRIVATE_KEY }}' > deploy_key
+          chmod 600 deploy_key
+
+      - name: Resolve deployment target
+        id: resolve
+        env:
+          DEPLOY_USER_FALLBACK: deploy
+        run: |
+          set -euo pipefail
+          DEPLOY_USER="${DEPLOY_USER:-$DEPLOY_USER_FALLBACK}"
+          current_ip="$(python3 - <<'PY'
+          import os
+          import socket
+
+          print(socket.gethostbyname(os.environ["PROD_PUBLIC_HOST"]))
+          PY
+          )"
+
+          if [[ "${{ inputs.rotate_public_ip }}" != "true" ]]; then
+            ssh-keyscan -t ed25519 "${PROD_PUBLIC_HOST}" > known_hosts
+            chmod 600 known_hosts
+            {
+              echo "target_host=${PROD_PUBLIC_HOST}"
+              echo "target_ip=${current_ip}"
+              echo "deploy_user=${DEPLOY_USER}"
+              echo "rotation_performed=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          server_json="$(hcloud server list -o json)"
+          current_primary_json="$(
+            CURRENT_IP="${current_ip}" \
+            SERVER_JSON="${server_json}" \
+            python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          current_ip = os.environ["CURRENT_IP"].strip()
+          servers = json.loads(os.environ["SERVER_JSON"])
+
+          for server in servers:
+              public_net = server.get("public_net") or {}
+              ipv4 = public_net.get("ipv4") or {}
+              if (ipv4.get("ip") or "").strip() != current_ip:
+                  continue
+              location = (server.get("datacenter") or {}).get("location") or {}
+              payload = {
+                  "server_id": str(server["id"]),
+                  "server_name": server["name"],
+                  "location": location.get("name") or "",
+                  "old_primary_ip_id": str(ipv4["id"]),
+                  "old_primary_ip": ipv4["ip"],
+              }
+              print(json.dumps(payload))
+              break
+          else:
+              sys.exit("Failed to map PROD_PUBLIC_HOST to a Hetzner server with a Primary IPv4")
+          PY
+          )"
+
+          server_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["server_id"])' <<<"$current_primary_json")"
+          server_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["server_name"])' <<<"$current_primary_json")"
+          location_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["location"])' <<<"$current_primary_json")"
+          old_primary_ip_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["old_primary_ip_id"])' <<<"$current_primary_json")"
+          old_primary_ip="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["old_primary_ip"])' <<<"$current_primary_json")"
+          [[ -n "${location_name}" ]] || {
+            echo "Failed to determine Hetzner location for ${server_name}" >&2
+            exit 1
+          }
+
+          new_primary_name="${server_name}-ipv4-${GITHUB_RUN_ID}"
+          new_primary_json="$(hcloud primary-ip create --name "${new_primary_name}" --type ipv4 --location "${location_name}" -o json)"
+          new_primary_ip_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); data=data[0] if isinstance(data, list) else data; print(data["id"])' <<<"$new_primary_json")"
+          new_primary_ip="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); data=data[0] if isinstance(data, list) else data; print(data["ip"])' <<<"$new_primary_json")"
+
+          old_primary_detached=false
+          new_primary_assigned=false
+          server_powered_off=false
+          rollback() {
+            set +e
+            if [[ "${new_primary_assigned}" == "true" ]]; then
+              hcloud primary-ip unassign "${new_primary_ip_id}" >/dev/null 2>&1 || true
+              hcloud primary-ip delete "${new_primary_ip_id}" >/dev/null 2>&1 || true
+            fi
+            if [[ "${old_primary_detached}" == "true" ]]; then
+              hcloud primary-ip assign --server "${server_id}" "${old_primary_ip_id}" >/dev/null 2>&1 || true
+            fi
+            if [[ "${server_powered_off}" == "true" ]]; then
+              hcloud server poweron "${server_id}" >/dev/null 2>&1 || true
+            fi
+            if [[ "${new_primary_assigned}" != "true" ]]; then
+              hcloud primary-ip delete "${new_primary_ip_id}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap 'rollback' ERR
+
+          hcloud server poweroff "${server_id}" >/dev/null
+          server_powered_off=true
+          hcloud primary-ip unassign "${old_primary_ip_id}" >/dev/null
+          old_primary_detached=true
+          hcloud primary-ip assign --server "${server_id}" "${new_primary_ip_id}" >/dev/null
+          new_primary_assigned=true
+          hcloud server poweron "${server_id}" >/dev/null
+          server_powered_off=false
+
+          for _ in $(seq 1 30); do
+            ssh-keyscan -t ed25519 "${new_primary_ip}" > known_hosts.new 2>/dev/null || true
+            if [[ -s known_hosts.new ]]; then
+              mv known_hosts.new known_hosts
+              chmod 600 known_hosts
+              break
+            fi
+            sleep 2
+          done
+
+          [[ -s known_hosts ]] || {
+            echo "Failed to capture SSH host key for rotated Primary IPv4 ${new_primary_ip}" >&2
+            exit 1
+          }
+
+          {
+            echo "target_host=${new_primary_ip}"
+            echo "target_ip=${new_primary_ip}"
+            echo "deploy_user=${DEPLOY_USER}"
+            echo "rotation_performed=true"
+            echo "server_id=${server_id}"
+            echo "server_name=${server_name}"
+            echo "old_primary_ip_id=${old_primary_ip_id}"
+            echo "old_primary_ip=${old_primary_ip}"
+            echo "new_primary_ip_id=${new_primary_ip_id}"
+            echo "new_primary_ip=${new_primary_ip}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render mtg config
+        env:
+          MTG_SECRET: ${{ secrets.PROD_MTG_SECRET }}
+          PUBLIC_IPV4: ${{ steps.resolve.outputs.target_ip }}
+        run: |
+          set -euo pipefail
+          ./scripts/render-mtg-config.sh > mtg.toml
+
+      - name: Copy deployment files
+        run: |
+          set -euo pipefail
+          scp -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            deploy/compose.yml mtg.toml \
+            "${{ steps.resolve.outputs.deploy_user }}@${{ steps.resolve.outputs.target_host }}:${DEPLOY_PATH}/"
 
       - name: Deploy container
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || '22' }}
-          fingerprint: ${{ secrets.PROD_HOST_FINGERPRINT }}
-          envs: DEPLOY_PATH,IMAGE_NAME
-          script: |
-            set -euo pipefail
+        env:
+          GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          set -euo pipefail
+          ssh -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            "${{ steps.resolve.outputs.deploy_user }}@${{ steps.resolve.outputs.target_host }}" \
+            "
+              set -euo pipefail
+              printf '%s\n' '${IMAGE_NAME}' > /tmp/mtg-image-name
+              printf '%s\n' '${GHCR_PULL_TOKEN}' | docker login ghcr.io -u '${GHCR_PULL_USERNAME}' --password-stdin
+              printf 'MTG_IMAGE=%s\n' \"\$(cat /tmp/mtg-image-name)\" > '${DEPLOY_PATH}/.env'
+              cd '${DEPLOY_PATH}'
+              docker compose -f '${DEPLOY_PATH}/compose.yml' pull
+              docker compose -f '${DEPLOY_PATH}/compose.yml' up -d
+              docker ps --filter name=mtg --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+            "
 
-            test -f "$DEPLOY_PATH/mtg.toml"
+      - name: Verify rotated deployment
+        if: steps.resolve.outputs.rotation_performed == 'true'
+        env:
+          TARGET_IP: ${{ steps.resolve.outputs.target_ip }}
+        run: |
+          set -euo pipefail
+          ssh -i deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=known_hosts \
+            "${{ steps.resolve.outputs.deploy_user }}@${{ steps.resolve.outputs.target_host }}" \
+            "
+              set -euo pipefail
+              docker ps --filter name=mtg --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+              ss -ltn sport = :443
+            "
+          TARGET_IP="${TARGET_IP}" python3 - <<'PY'
+          import os
+          import socket
 
-            cd "$DEPLOY_PATH"
-            awk '
-              BEGIN { set = 0 }
-              /^MTG_IMAGE=/ {
-                print "MTG_IMAGE=" image
-                set = 1
-                next
-              }
-              { print }
-              END {
-                if (!set) {
-                  print "MTG_IMAGE=" image
-                }
-              }
-            ' image="$IMAGE_NAME" .env 2>/dev/null > .env.tmp || printf 'MTG_IMAGE=%s\n' "$IMAGE_NAME" > .env.tmp
-            mv .env.tmp .env
-            docker compose pull
-            docker compose up -d
+          address = os.environ["TARGET_IP"]
+          with socket.create_connection((address, 443), timeout=5):
+              pass
+          PY
+
+      - name: Update DNS to rotated Primary IPv4
+        if: steps.resolve.outputs.rotation_performed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          DNS_RECORD_NAME: ${{ vars.PROD_PUBLIC_HOST }}
+          DNS_RECORD_CONTENT: ${{ steps.resolve.outputs.new_primary_ip }}
+        run: |
+          set -euo pipefail
+          ./scripts/upsert-cloudflare-dns.sh
+
+      - name: Mark IPv4 cutover complete
+        if: steps.resolve.outputs.rotation_performed == 'true'
+        id: cutover
+        run: echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: Delete old Primary IPv4
+        if: steps.resolve.outputs.rotation_performed == 'true'
+        run: |
+          set -euo pipefail
+          hcloud primary-ip delete "${{ steps.resolve.outputs.old_primary_ip_id }}"
+
+      - name: Roll back Primary IPv4 rotation
+        if: failure() && steps.resolve.outputs.rotation_performed == 'true' && steps.cutover.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          hcloud server poweroff "${{ steps.resolve.outputs.server_id }}" >/dev/null || true
+          hcloud primary-ip unassign "${{ steps.resolve.outputs.new_primary_ip_id }}" >/dev/null || true
+          hcloud primary-ip assign --server "${{ steps.resolve.outputs.server_id }}" "${{ steps.resolve.outputs.old_primary_ip_id }}" >/dev/null || true
+          hcloud server poweron "${{ steps.resolve.outputs.server_id }}" >/dev/null || true
+          hcloud primary-ip delete "${{ steps.resolve.outputs.new_primary_ip_id }}" >/dev/null || true
 
       - name: Report deployment
-        run: echo "Deployed ${IMAGE_NAME} to ${DEPLOY_PATH}"
+        env:
+          NEW_PRIMARY_IP: ${{ steps.resolve.outputs.new_primary_ip }}
+        run: |
+          if [[ "${{ steps.resolve.outputs.rotation_performed }}" == "true" ]]; then
+            echo "Deployed ${IMAGE_NAME} to ${PROD_PUBLIC_HOST} via rotated Primary IPv4 ${NEW_PRIMARY_IP}"
+          else
+            echo "Deployed ${IMAGE_NAME} to ${PROD_PUBLIC_HOST}"
+          fi

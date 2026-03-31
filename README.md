@@ -32,9 +32,6 @@ public IPv4 gets blocked.
    cp deploy/mtg.toml.example ./mtg.toml
    ```
 
-   The cloud-init bootstrap also writes a placeholder secret on new hosts, so a
-   deploy should not proceed until you replace it with a per-host value.
-
 3. Create `compose.yml`:
 
    ```yaml
@@ -42,6 +39,7 @@ public IPv4 gets blocked.
      mtg:
        image: ghcr.io/glidermcp/mtproxy-docker:latest
        container_name: mtg
+       command: ["run", "--tcp-buffer=256KB", "/config.toml"]
        restart: unless-stopped
        ports:
          - "443:443/tcp"
@@ -89,6 +87,8 @@ Operational rules:
 3. The front domain is an explicit operator choice and can change on future
    rotations.
 4. Direct-IP links are the primary recovery path. Stable DNS is optional.
+5. The container runtime starts `mtg` with `--tcp-buffer=256KB` for better
+   throughput on Hetzner-hosted links.
 
 ## Hetzner Deployment
 
@@ -98,70 +98,81 @@ This repo keeps the simple production layout under `/opt/mtproxy`:
 2. `mtg.toml`
 3. `.env` for the selected `MTG_IMAGE` tag
 
-Provisioning prerequisites:
+## GitHub Actions Zero-Touch Provisioning
 
-1. `hcloud`
-2. `gh`
-3. `ssh-keyscan`
-4. `ssh-keygen`
+The repo now supports a fully GitHub-managed production path for servers that
+have not been prepared manually.
 
-Bootstrap a deploy key once:
+Required GitHub Actions secrets:
 
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/mtproxy-actions -C gh-mtproxy-actions -N ""
-```
+1. `HCLOUD_TOKEN`
+2. `CLOUDFLARE_API_TOKEN`
+3. `CLOUDFLARE_ZONE_ID`
+4. `PROD_MTG_SECRET`
+5. `PROD_DEPLOY_SSH_PRIVATE_KEY`
+6. `PROD_DEPLOY_SSH_PUBLIC_KEY`
+7. `GHCR_PULL_USERNAME`
+8. `GHCR_PULL_TOKEN`
 
-Authenticate Hetzner:
+Required GitHub Actions variables:
 
-```bash
-hcloud context create mtproxy
-hcloud context use mtproxy
-```
+1. `PROD_PUBLIC_HOST`
+2. `PROD_DEPLOY_USER`
+3. `PROD_SERVER_NAME_PREFIX`
+4. `PROD_SERVER_TYPE`
+5. `PROD_SERVER_LOCATION`
+6. `PROD_SERVER_IMAGE`
 
-Initial setup:
+Automation entry points:
 
-```bash
-DEPLOY_SSH_PUBLIC_KEY_FILE=~/.ssh/mtproxy-actions.pub scripts/setup-all.sh
-```
+1. `Build Docker Image` publishes the image tag to GHCR.
+2. `Provision Production` creates a new Hetzner host, installs config, deploys
+   the container, updates DNS, and can remove the old host.
+3. `Deploy Production` redeploys the current production hostname without manual
+   SSH prep and can optionally rotate the billed Primary IPv4 on the same
+   Hetzner server.
 
-That script provisions the host and updates GitHub deploy secrets. After it
-finishes:
+How the zero-touch path works:
 
-1. SSH to the server.
-2. Edit `/opt/mtproxy/mtg.toml`.
-3. Validate direct-IP access with `PUBLIC_IPV4=<server-ip> scripts/print-access-links.sh`.
-4. Update DNS if you want a stable hostname.
-5. Trigger the Deploy Production workflow.
-
-Rotation safety:
-
-1. `scripts/rotate-hetzner.sh` refuses to update `PROD_HOST` unless it can also
-   capture and store the new SSH host fingerprint.
+1. `Provision Production` creates a fresh Hetzner host with the GitHub-managed
+   deploy key already installed through cloud-init.
+2. The workflow renders `/opt/mtproxy/mtg.toml` from `PROD_MTG_SECRET`, pushes
+   `compose.yml`, logs the host into GHCR, starts `mtg`, and only then updates
+   Cloudflare DNS.
+3. `Deploy Production` uses the current `PROD_PUBLIC_HOST`, fetches the live SSH
+   host key at runtime, rewrites `mtg.toml` from secrets, and redeploys without
+   any manual SSH bootstrap.
+4. If `Deploy Production` is run with `rotate_public_ip=true`, the workflow
+   keeps the same `PROD_MTG_SECRET`, powers the server off, swaps its billed
+   Primary IPv4, powers the server back on, redeploys to the new IPv4, checks
+   SSH plus TCP/443 reachability, updates DNS, and only then deletes the old
+   Primary IPv4.
 
 ## Rotation / Ban Recovery
 
-The intended recovery path is a fresh Hetzner host with a fresh IPv4.
+The intended recovery path is either a fresh Hetzner host with a fresh IPv4 or
+an in-place Primary IPv4 rotation on the current server.
 
-Use:
+Preferred automated path:
+
+1. Run `Provision Production` when you want a fresh host and fresh IP.
+2. Run `Deploy Production` when you want to redeploy the current active host.
+3. Run `Deploy Production` with `rotate_public_ip=true` when you want to keep
+   the same server, preserve the current MTG secret, leave IPv6 untouched, and
+   rotate only the billed Primary IPv4.
+
+Legacy local path:
 
 ```bash
 scripts/rotate-hetzner.sh
 ```
 
-What it does:
-
-1. Creates a new Hetzner server with a unique default name.
-2. Updates `PROD_HOST`, `PROD_PORT`, `PROD_USER`, and `PROD_HOST_FINGERPRINT`.
-3. Leaves DNS cutover as a separate explicit step so you can validate first.
-
 Recommended recovery order:
 
-1. Provision the new host.
-2. Create or copy `/opt/mtproxy/mtg.toml`.
-3. Validate direct-IP Telegram access.
-4. Repoint DNS if you want to keep a stable hostname.
-5. Deploy to the new host via GitHub Actions.
-6. Remove the old Hetzner host only after the new one works.
+1. Choose either fresh-host provisioning or in-place Primary IPv4 rotation.
+2. Validate direct-IP Telegram access.
+3. Repoint DNS if you want to keep a stable hostname.
+4. Remove the old Hetzner resource only after the new path works.
 
 ## Cloudflare Notes
 
@@ -174,21 +185,24 @@ Cloudflare is used for DNS only.
 
 ## GitHub Actions Deployment
 
-Required repository secrets:
-
-1. `PROD_HOST`
-2. `PROD_USER`
-3. `PROD_PORT`
-4. `PROD_SSH_KEY`
-5. `PROD_HOST_FINGERPRINT`
-
 Remote host expectations:
 
 1. Docker is installed.
-2. `/opt/mtproxy/mtg.toml` already exists.
-3. The remote user can run `docker compose`.
+2. The deploy user from `PROD_DEPLOY_USER` is present and has the GitHub-managed
+   public key in `authorized_keys`.
+3. `/opt/mtproxy` exists and is writable by the deploy user.
 4. `/opt/mtproxy/.env` is managed by the deploy workflow and stores
    `MTG_IMAGE=...`.
+
+`Deploy Production` inputs:
+
+1. `image_tag`
+   GHCR image tag to deploy. Defaults to `latest`.
+2. `rotate_public_ip`
+   Defaults to `false`. When set to `true`, the workflow rotates the billed
+   Hetzner Primary IPv4 on the current server, keeps `PROD_MTG_SECRET`
+   unchanged, leaves IPv6 untouched, and updates DNS only after the new IPv4 is
+   reachable.
 
 ## Censorship Resistance
 

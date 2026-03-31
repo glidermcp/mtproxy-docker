@@ -8,10 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CLOUD_INIT_TEMPLATE="${ROOT_DIR}/deploy/cloud-init.yaml"
 
-escape_sed_replacement() {
-  printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
-}
-
 first_existing_admin_key() {
   local candidate
 
@@ -54,6 +50,7 @@ load_local_env
 require_command hcloud
 require_command ssh-keyscan
 require_command ssh-keygen
+require_command python3
 
 SERVER_NAME="${SERVER_NAME:-mtg-prod}"
 SERVER_TYPE="${SERVER_TYPE:-cx23}"
@@ -61,37 +58,28 @@ SERVER_LOCATION="${SERVER_LOCATION:-hel1}"
 SERVER_IMAGE="${SERVER_IMAGE:-ubuntu-24.04}"
 PUBLIC_HOST="${PUBLIC_HOST:-mtproxy.example.com}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
-ADMIN_SSH_KEY_NAME="${ADMIN_SSH_KEY_NAME:-mtproxy-admin}"
 ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PUBLIC_KEY_FILE:-$(first_existing_admin_key || true)}"
 DEPLOY_SSH_PUBLIC_KEY_FILE="${DEPLOY_SSH_PUBLIC_KEY_FILE:-${HOME}/.ssh/mtproxy-actions.pub}"
 
 [[ -f "$CLOUD_INIT_TEMPLATE" ]] || die "Missing cloud-init template: $CLOUD_INIT_TEMPLATE"
-[[ -f "$ADMIN_SSH_PUBLIC_KEY_FILE" ]] || die "Missing admin SSH public key: $ADMIN_SSH_PUBLIC_KEY_FILE"
 [[ -f "$DEPLOY_SSH_PUBLIC_KEY_FILE" ]] || die "Missing deploy SSH public key: $DEPLOY_SSH_PUBLIC_KEY_FILE"
 
 hcloud context list >/dev/null 2>&1 || die "Hetzner CLI is not authenticated. Run 'hcloud context create mtproxy' first."
 
-if ! hcloud ssh-key describe "$ADMIN_SSH_KEY_NAME" >/dev/null 2>&1; then
-  echo "Creating Hetzner SSH key ${ADMIN_SSH_KEY_NAME} from ${ADMIN_SSH_PUBLIC_KEY_FILE}"
-  hcloud ssh-key create \
-    --name "$ADMIN_SSH_KEY_NAME" \
-    --public-key-from-file "$ADMIN_SSH_PUBLIC_KEY_FILE" >/dev/null
-fi
-
 tmp_user_data="$(mktemp)"
-trap 'rm -f "$tmp_user_data"' EXIT
+tmp_authorized_keys="$(mktemp)"
+trap 'rm -f "$tmp_user_data" "$tmp_authorized_keys"' EXIT
 
-admin_public_key="$(tr -d '\n' < "$ADMIN_SSH_PUBLIC_KEY_FILE")"
-deploy_public_key="$(tr -d '\n' < "$DEPLOY_SSH_PUBLIC_KEY_FILE")"
-escaped_user="$(escape_sed_replacement "$DEPLOY_USER")"
-escaped_admin_key="$(escape_sed_replacement "$admin_public_key")"
-escaped_key="$(escape_sed_replacement "$deploy_public_key")"
+if [[ -f "$ADMIN_SSH_PUBLIC_KEY_FILE" ]]; then
+  cat "$ADMIN_SSH_PUBLIC_KEY_FILE" >> "$tmp_authorized_keys"
+fi
+cat "$DEPLOY_SSH_PUBLIC_KEY_FILE" >> "$tmp_authorized_keys"
+awk '!seen[$0]++' "$tmp_authorized_keys" > "${tmp_authorized_keys}.dedup"
+mv "${tmp_authorized_keys}.dedup" "$tmp_authorized_keys"
 
-sed \
-  -e "s/__DEPLOY_USER__/${escaped_user}/g" \
-  -e "s/__ADMIN_SSH_PUBLIC_KEY__/${escaped_admin_key}/g" \
-  -e "s/__DEPLOY_SSH_PUBLIC_KEY__/${escaped_key}/g" \
-  "$CLOUD_INIT_TEMPLATE" > "$tmp_user_data"
+AUTHORIZED_KEYS_FILE="$tmp_authorized_keys" \
+DEPLOY_USER="$DEPLOY_USER" \
+"${SCRIPT_DIR}/render-cloud-init.sh" "$CLOUD_INIT_TEMPLATE" > "$tmp_user_data"
 
 if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
   echo "Hetzner server ${SERVER_NAME} already exists, skipping creation."
@@ -102,7 +90,6 @@ else
     --type "$SERVER_TYPE" \
     --location "$SERVER_LOCATION" \
     --image "$SERVER_IMAGE" \
-    --ssh-key "$ADMIN_SSH_KEY_NAME" \
     --user-data-from-file "$tmp_user_data"
 fi
 
@@ -123,23 +110,25 @@ Deploy user: ${DEPLOY_USER}
 
 Next steps:
 1. Run scripts/upsert-cloudflare-dns.sh with DNS_RECORD_CONTENT=${server_ip}
-2. Edit /opt/mtproxy/mtg.toml on the server and set real mtg values
-3. Add GitHub Actions secrets:
-   PROD_HOST=${server_ip}
-   PROD_USER=${DEPLOY_USER}
-   PROD_PORT=22
+2. Store your deploy key and production config in GitHub Actions:
+   PROD_DEPLOY_SSH_PRIVATE_KEY=<private deploy key contents>
+   PROD_DEPLOY_SSH_PUBLIC_KEY=<public deploy key contents>
+   PROD_MTG_SECRET=<mtg FakeTLS secret>
+3. Set GitHub Actions variables:
+   PROD_PUBLIC_HOST=${PUBLIC_HOST}
+   PROD_DEPLOY_USER=${DEPLOY_USER}
 EOF
 
 if [[ -n "$fingerprint" ]]; then
   cat <<EOF
-   PROD_HOST_FINGERPRINT=${fingerprint}
+   Captured SSH host fingerprint: ${fingerprint}
 EOF
 else
   cat <<'EOF'
-   PROD_HOST_FINGERPRINT=<run ssh-keyscan later and add the ed25519 SHA256 fingerprint>
+   Captured SSH host fingerprint: <run ssh-keyscan later if you want to verify manually>
 EOF
 fi
 
 cat <<'EOF'
-4. Paste the private contents of your deploy key into PROD_SSH_KEY
+4. Trigger the Deploy Production workflow after DNS points at the new host
 EOF
